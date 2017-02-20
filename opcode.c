@@ -191,13 +191,20 @@ typedef unsigned char  byte;
      { "TXS",   0 },                     /* _txs                              */
      { "WAI",   0 },                     /* _wai                              */
      { "RESET", 0 },                     /* _reset                            */
-   /* 6800 EXTRA OPCODES */
+     /* 6800 EXTRA OPCODES */
      { "CPX",   0 },                     /* _cpx                              */
-   /* 6309 EXTRA OPCODES */
+     /* 6801/6803 EXTRA OPCODES */
+     { "PULX",  0 },                     /* _pulx                             */
+     { "PSHX",  0 },                     /* _pshx                             */
+     /* 6301/03 EXTRA OPCODES */
+     { "SLP",   0 },                     /* _slp                              */
+     { "XGDX",  0 },                     /* _xgdx                             */
+     /* 630x EXTRA OPCODES */
      { "AIM",   0 },                     /* _aim                              */
      { "EIM",   0 },                     /* _eim                              */
      { "OIM",   0 },                     /* _oim                              */
      { "TIM",   0 },                     /* _tim                              */
+     /* 6309 EXTRA OPCODES */
      { "BAND",  0 },                     /* _band                             */
      { "BIAND", 0 },                     /* _biand                            */
      { "BOR",   0 },                     /* _bor                              */

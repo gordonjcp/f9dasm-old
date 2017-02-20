@@ -1,13 +1,11 @@
 /***************************************************************************
- * f9dasm -- Portable M6800/M6809/H6309/OS9/FLEX disassembler              *
+ * f9dasm -- Portable M6800..//H6309 Binary/OS9/FLEX disassembler       *
  * HEAVILY modified by H.Seib to adapt it to his needs.                    *
  *                                                                         *
  * Line Disassembler Engine Copyright (C) 2000  Arto Salmi                 *
- * Various additions        Copyright (c) 2001-2009 Hermann Seib           *
- * Further additions        Copyright (c) 2014  Rainer Buchty              *
- *    - output nicing using separator after BRA/JMP/PULx PC/RTx/SWIx       *
- *    - label-overrun fix                                                  *
- *    - improved usage info for label-file parser                          *
+ * Various additions        Copyright (c) 2001-2015 Hermann Seib           *
+ * Various additions        Copyright (c) 2013 by Colin Bourassa           *
+ * Various additions        Copyright (c) 2014 by Rainer Buchty            *
  *                                                                         *
  * This program is free software; you can redistribute it and/or modify    *
  * it under the terms of the GNU General Public License as published by    *
@@ -24,20 +22,90 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.               *
  ***************************************************************************/
 
-// comments RB
-//
-// todo disassembler:
-//
-//  (1) auto-parse system vectors if not in OS9 mode
-//  (2) run along system vectors to get improved code/data view
-//
-// todo label parser/printer:
-//
-//  (1) make label parser accept ranged SETDP directives
-//  (2) support for banked code, accept page ranges (related to (1))
-//  (3) introduce directive that marks #$xxxx constant as numerical constant, not memory address
+/*
+ * There's a variant "1.61-RB" available at
+ *   https://github.com/gordonjcp/f9dasm
+ * (based on my V1.60) which contains some interesting changes by Rainer Buchty.
+ * Unfortunately, I only saw that by chance in summer 2015, 6 versions later.
+ * Rainer customized it to his own taste, so I didn't directly add his changes
+ * to my code, which defaults to TSC Assembler compatible output;
+ * you can, however, create a "Rainer Buchty compatible variant" by either
+ *     1) setting the -DRB_VARIANT compiler flag or
+ *     2) setting the following definition to anything other than 0.
+*/
 
-#define VERSION "1.61-RB"
+#ifndef RB_VARIANT
+  #define RB_VARIANT 1
+#endif
+
+/* History, as far as I could retrace it:
+
+   v0.1  2000-02-06 Arto Salmi's original dasm09 6809/6309
+   V1.01 2001-??-?? Start of my changes; dates and changes for this and the
+                    next 54 versions are lost in the mists of time ...
+                    it grew in parallel to my reverse-engineering of the
+                    PPG Wave synthesizers, the PPG PRK Keyboard and the
+                    PPG Waveterm A operating system
+   V1.56 2006-02-05 First appearance in my versioning system
+                      (can't believe I lived without one for over 20 years!)
+   V1.57 2008-11-18 Added "FILE filename [offset]" directive
+   V1.58 2009-02-07 6800 mode added
+   V1.59 2009-02-23 Made gcc-compatible (so yes, it DOES work on Linux)
+                    Command line option -help added to get normal plus
+                      info file usage
+   V1.60 2009-03-13 Duplicate Flex labels changed
+                    Error in PCR handling corrected
+   V1.61 2010-05-05 Cured a little bug in binary file loading
+                      (detected by J. Sigle)
+   V1.62 2010-05-06 Little bug in 6800 indexed addressing cured
+                    Documentation expanded
+   V1.63 2013-06-11 Added Colin Bourassa's 6801/6803 support
+   V1.64 2013-06-12 nofcc option added
+                    Added fcc option
+                    Added proper [no]asm and [no]fcc documentation
+   V1.65 2013-06-13 Added omitzero / showzero options
+   V1.66 2015-06-18 Added VS2008 project files, corrected VS6 mot2bin project
+                    mot2bin still displayed hex2bin messages (it only took about
+                      10 years until I noticed that...)
+                    Added -6802/-6803/-6808/-6809 command line options
+                    Added changes from Rainer Buchty's version at
+                      https://github.com/gordonjcp/f9dasm
+                    Added -[no]forced command line option
+                    Added -ldchar command line option
+                    Updated documentation
+   V1.67 2015-06-19 Made setdp address-aware
+                    Correctly default to DP 0 on 6809 / 6309
+                    Added enumeration for info-file keywords to make code
+                      more readable
+   V1.68 2015-06-22 setdp addr dp now sets dp for all addresses starting
+                      at addr up to the end of input
+                    Updated documentation
+   V1.69 2015-07-02 (RB) CPU-dependent system vector parsing
+                    automatically inserts
+                    *   system vectors as word-data labels
+                    *   entry points as code labels
+   V1.70 2015-07-03 phase addr[-addr] phase  command added
+   V1.71 2015-07-03 (RB) CVEC/DVEC directives and noLabelLoad option added
+                    *   CVEC/DVEC declare code/data vector fields
+                        if not declared already, they will be auto-inserted into label list
+                    *   noLabelLoad option suppresses adding of load-address label
+   V1.72 2015-07-08 Intel and Motorola Hex file parsing improved
+   V1.73 2015-07-09 (RB) 6301 option added
+                    *   like 6801/03 but with some 6809-specific commands (AIM/EIM/OIM/TIM) and addressing modes (BE/BI)
+                    *   additional opcodes SLP and XGDX
+   V1.74 2015-07-09 phase addr[-addr] {+|-}rel  command added
+   V1.75 2015-07-26 Only install system vector labels if they aren't defined in an info file
+                    INSERT, COMMENT, PREPCOMM without address range can be used to prepend text to the output, too
+                    PREPEND without address now works like normal PREPEND - it adds BEFORE the first line
+*/
+
+#define ID  "1.75"
+
+#if RB_VARIANT
+#define VERSION ID "-RB"
+#else
+#define VERSION ID
+#endif
 
 /* NOTE! os9 call table is not tested. */
 
@@ -46,23 +114,12 @@
 #include <string.h>
 #include <ctype.h>
 
+
 #include "opcode.h"
 #include "mc6309.h"
 #include "mc6809.h"
+#include "mc68hc11.h"
 
-// RB: I know this is ugly ...
-#define COMMLINE                                                \
-  if (commentlines[pc])                                         \
-    {                                                           \
-    if ((byte)commentlines[pc][0] == (byte)0xff)                \
-      fprintf(out, "%s\n", commentlines[pc] + 1);               \
-    else                                                        \
-      {                                                         \
-      if ((*commentlines[pc]) && (*commentlines[pc] != '\n'))   \
-        fprintf(out, "%c ", cCommChar);                         \
-      fprintf(out, "%s\n", commentlines[pc]);                   \
-      }                                                         \
-    }                                                           \
 
 #define MEMORY(address)  (memory[(address)&0xffff])
 #define OPCODE(address)  MEMORY(address)
@@ -79,6 +136,10 @@
 #define DATATYPE_CHAR   (DATATYPE_BINARY | DATATYPE_HEX)
 #define DATATYPE_RMB    (DATATYPE_WORD | DATATYPE_BINARY | DATATYPE_HEX)
 
+/* RB: new vector datatypes */
+#define DATATYPE_DVEC   0x0100
+#define DATATYPE_CVEC   0x0200
+
 #define AREATYPE_CLABEL 0x01
 #define AREATYPE_LABEL  0x02
 #define AREATYPE_ULABEL 0x04
@@ -91,6 +152,10 @@
 #define AREATYPE_HEX    (AREATYPE_DATA | DATATYPE_HEX)
 #define AREATYPE_CHAR   (AREATYPE_DATA | DATATYPE_CHAR)
 #define AREATYPE_CONST  (AREATYPE_CODE | AREATYPE_DATA)
+
+/* RB: new vector areatypes */
+#define AREATYPE_DVEC   (AREATYPE_WORD | DATATYPE_DVEC)
+#define AREATYPE_CVEC   (AREATYPE_WORD | DATATYPE_CVEC)
 
 #define IS_CODE(address) ((ATTRBYTE(address)&AREATYPE_CONST)==AREATYPE_CODE)
 #define IS_DATA(address) ((ATTRBYTE(address)&AREATYPE_CONST)==AREATYPE_DATA)
@@ -113,6 +178,11 @@
 #define IS_CHAR(address)  (!IS_WORD(address) && IS_HEX(address) && IS_BINARY(address))
 #define IS_RMB(address) ((ATTRBYTE(address) & DATATYPE_RMB) == DATATYPE_RMB)
 
+/* RB: new vector checks */
+#define IS_VEC(address)   (ATTRBYTE(address) & (DATATYPE_DVEC | DATATYPE_CVEC))
+#define IS_DVEC(address)  (ATTRBYTE(address) & DATATYPE_DVEC)
+#define IS_CVEC(address)  (ATTRBYTE(address) & DATATYPE_CVEC)
+
 #ifndef TYPES
 #define TYPES
 typedef unsigned char  byte;
@@ -134,43 +204,73 @@ typedef unsigned short word;
 #define FNCASESENS 1
 #endif
 
+#define MAXPHASES 16384                 /* should be overkill, but who knows */
+
+typedef struct _phasedef                /* data for a phase                  */
+  {
+  unsigned short from;
+  unsigned short to;
+  unsigned short phase;
+  unsigned short rel;
+  } phasedef;
+
 /*****************************************************************************/
 /* Global Data                                                               */
 /*****************************************************************************/
 
-// RB: get a divider after BRA/JMP/SWIx/RTS/RTI/PULx PC
-int trenner=0;
-
-// RB: get a divider between data and code
-int lastwasdata=0;
-
 byte *memory = NULL;
-byte *label = NULL;
+int *label = NULL;                      /* RB: space for more flags          */
 byte *used = NULL;
 char **lblnames = NULL;
 char **commentlines = NULL;
 char **lcomments = NULL;
 unsigned short *rels = NULL;
+short *dps = NULL;
+phasedef *phases = NULL;
+int numphases = 0;
 int *remaps = NULL;
-int  dirpage = -1;                      /* direct page used                  */
-char cCommChar = ';';                   /* comment delimiter character       */
-char *szPrepend = NULL;                 /* text to be printed before all     */
-
-// rendering defaults
+int  dirpage = 0;                       /* direct page used (default 0)      */
+char * szPrepend = NULL;                /* text to be printed before all     */
 int showhex = TRUE;
 int showaddr = TRUE;
+#if RB_VARIANT
 int showasc = FALSE;
 int useFlex = FALSE;
-int emitComments = TRUE;
-
-byte defaultDataType = DATATYPE_HEX;
 int useConvenience = FALSE;
-
+char cCommChar = ';';                   /* comment delimiter character       */
+char *forcedirectaddr = "";
+char *forceextendedaddr = "";
+char cLblDelim = ':';
+#else
+int showasc = TRUE;
+int useFlex = TRUE;
+int useConvenience = TRUE;
+char cCommChar = '*';                   /* comment delimiter character       */
+char *forcedirectaddr = "<";
+char *forceextendedaddr = ">";
+char cLblDelim = ' ';
+#endif
+int emitComments = TRUE;
+byte defaultDataType = DATATYPE_HEX;
+int usefcc = TRUE;
+int showIndexedModeZeroOperand = FALSE;
 char *fname = NULL, *outname = NULL, *infoname = NULL;
 unsigned begin = 0xffff, end = 0, offset = 0;
 int load = -1;
 static char *loaded[200] = {0};
 char *sLoadType = "";
+/* RB: get a divider after BRA/JMP/SWIx/RTS/RTI/PULx PC */
+int optdelimbar = FALSE;
+
+/* RB: vector address */
+int vaddr;
+
+/* RB: option -- suppress auto-insertion of load-address label */
+int noLoadLabel = FALSE;
+
+/* RB: system vectors */
+char *vec_6801[] = {"IRQ_SCI","IRQ_T0F","IRQ_OCF","IRQ_ICF","IRQ_EXT","SWI","NMI","RST"};
+char *vec_6809[] = {"DIV0","SWI3","SWI2","FIRQ","IRQ","SWI","NMI","RST"};
 
 enum                                    /* available options                 */
   {
@@ -197,8 +297,19 @@ enum                                    /* available options                 */
   OPTION_COMMENT,
   OPTION_NOCOMMENT,
   OPTION_6800,
-  OPTION_68HC11,
   OPTION_HELP,
+  OPTION_6801,
+  OPTION_FCC,
+  OPTION_NOFCC,
+  OPTION_OMITZERO,
+  OPTION_SHOWZERO,
+  OPTION_FORCED,
+  OPTION_NOFORCED,
+  OPTION_6809,
+  OPTION_LDCHAR,
+  OPTION_NOLOADLABEL,
+  OPTION_6301,
+  OPTION_68HC11,
   };
 
 static struct
@@ -229,11 +340,26 @@ static struct
   { "nodec",     OPTION_NODEC },
   { "comment",   OPTION_COMMENT },
   { "nocomment", OPTION_NOCOMMENT },
+  { "6301",      OPTION_6301 },
+  { "6303",      OPTION_6301 },
   { "6309",      OPTION_6309 },
   { "6800",      OPTION_6800 },
+  { "6801",      OPTION_6801 },
+  { "6802",      OPTION_6800 },
+  { "6803",      OPTION_6801 },
+  { "6808",      OPTION_6800 },
+  { "6809",      OPTION_6809 },
   { "68hc11",    OPTION_68HC11 },
   { "help",      OPTION_HELP },
-  { NULL, 0 }
+  { "fcc",       OPTION_FCC },
+  { "nofcc",     OPTION_NOFCC },
+  { "omitzero",  OPTION_OMITZERO },
+  { "showzero",  OPTION_SHOWZERO },
+  { "forced",    OPTION_FORCED },
+  { "noforced",  OPTION_NOFORCED },
+  { "ldchar",    OPTION_LDCHAR },
+  { "noll",      OPTION_NOLOADLABEL },
+ { NULL, 0 }
   };
 
 char *os9_codes[0x100] =
@@ -372,20 +498,147 @@ byte m6800_codes[512] =
   _ill  ,_nom,   _ill  ,_nom,   _ldx  ,_ext,   _stx  ,_ext,     /* FC..FF */
   };
 
+byte m6801_codes[512] =
+  {
+  _ill  ,_nom,   _nop  ,_imp,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
+  _lsrd ,_imp,   _asld ,_imp,   _tap  ,_imp,   _tpa  ,_imp,     /* 04..07 */
+  _inx  ,_imp,   _dex  ,_imp,   _clv  ,_imp,   _sev  ,_imp,     /* 08..0B */
+  _clc  ,_imp,   _sec  ,_imp,   _cli  ,_imp,   _sei  ,_imp,     /* 0C..0F */
+  _sba  ,_imp,   _cba  ,_imp,   _ill  ,_nom,   _ill  ,_nom,     /* 10..13 */
+  _ill  ,_nom,   _ill  ,_nom,   _tab  ,_imp,   _tba  ,_imp,     /* 14..17 */
+  _ill  ,_nom,   _daa  ,_imp,   _ill  ,_nom,   _aba  ,_imp,     /* 18..1B */
+  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 1C..1F */
+  _bra  ,_reb,   _brn  ,_reb,   _bhi  ,_reb,   _bls  ,_reb,     /* 20..23 */
+  _bcc  ,_reb,   _bcs  ,_reb,   _bne  ,_reb,   _beq  ,_reb,     /* 24..27 */
+  _bvc  ,_reb,   _bvs  ,_reb,   _bpl  ,_reb,   _bmi  ,_reb,     /* 28..2B */
+  _bge  ,_reb,   _blt  ,_reb,   _bgt  ,_reb,   _ble  ,_reb,     /* 2C..2F */
+  _tsx  ,_imp,   _ins  ,_imp,   _pula ,_imp,   _pulb ,_imp,     /* 30..33 */
+  _des  ,_imp,   _txs  ,_imp,   _psha ,_imp,   _pshb ,_imp,     /* 34..37 */
+  _pulx ,_imp,   _rts  ,_imp,   _abx  ,_imp,   _rti  ,_imp,     /* 38..3B */
+  _pshx ,_imp,   _mul  ,_imp,   _wai  ,_imp,   _swi  ,_imp,     /* 3C..3F */
+  _nega ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _coma ,_imp,     /* 40..43 */
+  _lsra ,_imp,   _ill  ,_nom,   _rora ,_imp,   _asra ,_imp,     /* 44..47 */
+  _asla ,_imp,   _rola ,_imp,   _deca ,_imp,   _ill  ,_nom,     /* 48..4B */
+  _inca ,_imp,   _tsta ,_imp,   _ill  ,_nom,   _clra ,_imp,     /* 4C..4F */
+  _negb ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _comb ,_imp,     /* 50..53 */
+  _lsrb ,_imp,   _ill  ,_nom,   _rorb ,_imp,   _asrb ,_imp,     /* 54..57 */
+  _aslb ,_imp,   _rolb ,_imp,   _decb ,_imp,   _ill  ,_nom,     /* 58..5B */
+  _incb ,_imp,   _tstb ,_imp,   _ill  ,_nom,   _clrb ,_imp,     /* 5C..5F */
+  _neg  ,_ix8,   _ill  ,_nom,   _ill  ,_nom,   _com  ,_ix8,     /* 60..63 */
+  _lsr  ,_ix8,   _ill  ,_nom,   _ror  ,_ix8,   _asr  ,_ix8,     /* 64..67 */
+  _asl  ,_ix8,   _rol  ,_ix8,   _dec  ,_ix8,   _ill  ,_nom,     /* 68..6B */
+  _inc  ,_ix8,   _tst  ,_ix8,   _jmp  ,_ix8,   _clr  ,_ix8,     /* 6C..6F */
+  _neg  ,_ext,   _ill  ,_nom,   _ill  ,_nom,   _com  ,_ext,     /* 70..73 */
+  _lsr  ,_ext,   _ill  ,_nom,   _ror  ,_ext,   _asr  ,_ext,     /* 74..77 */
+  _asl  ,_ext,   _rol  ,_ext,   _dec  ,_ext,   _ill  ,_nom,     /* 78..7B */
+  _inc  ,_ext,   _tst  ,_ext,   _jmp  ,_ext,   _clr  ,_ext,     /* 7C..7F */
+  _suba ,_imb,   _cmpa ,_imb,   _sbca ,_imb,   _subd ,_imw,     /* 80..83 */
+  _anda ,_imb,   _bita ,_imb,   _lda  ,_imb,   _ill  ,_nom,     /* 84..87 */
+  _eora ,_imb,   _adca ,_imb,   _ora  ,_imb,   _adda ,_imb,     /* 88..8B */
+  _cpx  ,_imw,   _bsr  ,_reb,   _lds  ,_imw,   _ill  ,_nom,     /* 8C..8F */
+  _suba ,_dir,   _cmpa ,_dir,   _sbca ,_dir,   _subd ,_dir,     /* 90..93 */
+  _anda ,_dir,   _bita ,_dir,   _lda  ,_dir,   _sta  ,_dir,     /* 94..97 */
+  _eora ,_dir,   _adca ,_dir,   _ora  ,_dir,   _adda ,_dir,     /* 98..9B */
+  _cpx  ,_dir,   _jsr  ,_dir,   _lds  ,_dir,   _sts  ,_dir,     /* 9C..9F */
+  _suba ,_ix8,   _cmpa ,_ix8,   _sbca ,_ix8,   _subd ,_ix8,     /* A0..A3 */
+  _anda ,_ix8,   _bita ,_ix8,   _lda  ,_ix8,   _sta  ,_ix8,     /* A4..A7 */
+  _eora ,_ix8,   _adca ,_ix8,   _ora  ,_ix8,   _adda ,_ix8,     /* A8..AB */
+  _cpx  ,_ix8,   _jsr  ,_ix8,   _lds  ,_ix8,   _sts  ,_ix8,     /* AC..AF */
+  _suba ,_ext,   _cmpa ,_ext,   _sbca ,_ext,   _subd ,_ext,     /* B0..B3 */
+  _anda ,_ext,   _bita ,_ext,   _lda  ,_ext,   _sta  ,_ext,     /* B4..B7 */
+  _eora ,_ext,   _adca ,_ext,   _ora  ,_ext,   _adda ,_ext,     /* B8..BB */
+  _cpx  ,_ext,   _jsr  ,_ext,   _lds  ,_ext,   _sts  ,_ext,     /* BC..BF */
+  _subb ,_imb,   _cmpb ,_imb,   _sbcb ,_imb,   _addd ,_imw,     /* C0..C3 */
+  _andb ,_imb,   _bitb ,_imb,   _ldb  ,_imb,   _ill  ,_nom,     /* C4..C7 */
+  _eorb ,_imb,   _adcb ,_imb,   _orb  ,_imb,   _addb ,_imb,     /* C8..CB */
+  _ldd  ,_imw,   _ill  ,_nom,   _ldx  ,_imw,   _ill  ,_nom,     /* CC..CF */
+  _subb ,_dir,   _cmpb ,_dir,   _sbcb ,_dir,   _addd ,_dir,     /* D0..D3 */
+  _andb ,_dir,   _bitb ,_dir,   _ldb  ,_dir,   _stb  ,_dir,     /* D4..D7 */
+  _eorb ,_dir,   _adcb ,_dir,   _orb  ,_dir,   _addb ,_dir,     /* D8..DB */
+  _ldd  ,_dir,   _std  ,_dir,   _ldx  ,_dir,   _stx  ,_dir,     /* DC..DF */
+  _subb ,_ix8,   _cmpb ,_ix8,   _sbcb ,_ix8,   _addd ,_ix8,     /* E0..E3 */
+  _andb ,_ix8,   _bitb ,_ix8,   _ldb  ,_ix8,   _stb  ,_ix8,     /* E4..E7 */
+  _eorb ,_ix8,   _adcb ,_ix8,   _orb  ,_ix8,   _addb ,_ix8,     /* E8..EB */
+  _ldd  ,_ix8,   _std  ,_ix8,   _ldx  ,_ix8,   _stx  ,_ix8,     /* EC..EF */
+  _subb ,_ext,   _cmpb ,_ext,   _sbcb ,_ext,   _addd ,_ext,     /* F0..F3 */
+  _andb ,_ext,   _bitb ,_ext,   _ldb  ,_ext,   _stb  ,_ext,     /* F4..F7 */
+  _eorb ,_ext,   _adcb ,_ext,   _orb  ,_ext,   _addb ,_ext,     /* F8..FB */
+  _ldd  ,_ext,   _std  ,_ext,   _ldx  ,_ext,   _stx  ,_ext,     /* FC..FF */
+  };
+
+byte m6301_codes[512] =
+  {
+  _ill  ,_nom,   _nop  ,_imp,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
+  _lsrd ,_imp,   _asld ,_imp,   _tap  ,_imp,   _tpa  ,_imp,     /* 04..07 */
+  _inx  ,_imp,   _dex  ,_imp,   _clv  ,_imp,   _sev  ,_imp,     /* 08..0B */
+  _clc  ,_imp,   _sec  ,_imp,   _cli  ,_imp,   _sei  ,_imp,     /* 0C..0F */
+  _sba  ,_imp,   _cba  ,_imp,   _ill  ,_nom,   _ill  ,_nom,     /* 10..13 */
+  _ill  ,_nom,   _ill  ,_nom,   _tab  ,_imp,   _tba  ,_imp,     /* 14..17 */
+  _xgdx ,_imp,   _daa  ,_imp,   _slp  ,_imp,   _aba  ,_imp,     /* 18..1B: extra 0x18/xgdx, 0x1a/slp */
+  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 1C..1F */
+  _bra  ,_reb,   _brn  ,_reb,   _bhi  ,_reb,   _bls  ,_reb,     /* 20..23 */
+  _bcc  ,_reb,   _bcs  ,_reb,   _bne  ,_reb,   _beq  ,_reb,     /* 24..27 */
+  _bvc  ,_reb,   _bvs  ,_reb,   _bpl  ,_reb,   _bmi  ,_reb,     /* 28..2B */
+  _bge  ,_reb,   _blt  ,_reb,   _bgt  ,_reb,   _ble  ,_reb,     /* 2C..2F */
+  _tsx  ,_imp,   _ins  ,_imp,   _pula ,_imp,   _pulb ,_imp,     /* 30..33 */
+  _des  ,_imp,   _txs  ,_imp,   _psha ,_imp,   _pshb ,_imp,     /* 34..37 */
+  _pulx ,_imp,   _rts  ,_imp,   _abx  ,_imp,   _rti  ,_imp,     /* 38..3B */
+  _pshx ,_imp,   _mul  ,_imp,   _wai  ,_imp,   _swi  ,_imp,     /* 3C..3F */
+  _nega ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _coma ,_imp,     /* 40..43 */
+  _lsra ,_imp,   _ill  ,_nom,   _rora ,_imp,   _asra ,_imp,     /* 44..47 */
+  _asla ,_imp,   _rola ,_imp,   _deca ,_imp,   _ill  ,_nom,     /* 48..4B */
+  _inca ,_imp,   _tsta ,_imp,   _ill  ,_nom,   _clra ,_imp,     /* 4C..4F */
+  _negb ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _comb ,_imp,     /* 50..53 */
+  _lsrb ,_imp,   _ill  ,_nom,   _rorb ,_imp,   _asrb ,_imp,     /* 54..57 */
+  _aslb ,_imp,   _rolb ,_imp,   _decb ,_imp,   _ill  ,_nom,     /* 58..5B */
+  _incb ,_imp,   _tstb ,_imp,   _ill  ,_nom,   _clrb ,_imp,     /* 5C..5F */
+  _neg  ,_ix8,   _aim  ,_bi,    _oim  ,_bi,    _com  ,_ix8,     /* 60..63: extra 0x61/aim, 0x62/oim */
+  _lsr  ,_ix8,   _eim  ,_bi,    _ror  ,_ix8,   _asr  ,_ix8,     /* 64..67: extra 0x65/eim */
+  _asl  ,_ix8,   _rol  ,_ix8,   _dec  ,_ix8,   _tim  ,_bi,      /* 68..6B: extra 0x6b/tim */
+  _inc  ,_ix8,   _tst  ,_ix8,   _jmp  ,_ix8,   _clr  ,_ix8,     /* 6C..6F */
+  _neg  ,_ext,   _aim  ,_bd,    _oim  ,_bd,    _com  ,_ext,     /* 70..73: extra 0x71/aim, 0x72/oim */
+  _lsr  ,_ext,   _eim  ,_bd,    _ror  ,_ext,   _asr  ,_ext,     /* 74..77: extra 0x75/eim */
+  _asl  ,_ext,   _rol  ,_ext,   _dec  ,_ext,   _tim  ,_bd,      /* 78..7B: extra 0x7b/tim */
+  _inc  ,_ext,   _tst  ,_ext,   _jmp  ,_ext,   _clr  ,_ext,     /* 7C..7F */
+  _suba ,_imb,   _cmpa ,_imb,   _sbca ,_imb,   _subd ,_imw,     /* 80..83 */
+  _anda ,_imb,   _bita ,_imb,   _lda  ,_imb,   _ill  ,_nom,     /* 84..87 */
+  _eora ,_imb,   _adca ,_imb,   _ora  ,_imb,   _adda ,_imb,     /* 88..8B */
+  _cpx  ,_imw,   _bsr  ,_reb,   _lds  ,_imw,   _ill  ,_nom,     /* 8C..8F */
+  _suba ,_dir,   _cmpa ,_dir,   _sbca ,_dir,   _subd ,_dir,     /* 90..93 */
+  _anda ,_dir,   _bita ,_dir,   _lda  ,_dir,   _sta  ,_dir,     /* 94..97 */
+  _eora ,_dir,   _adca ,_dir,   _ora  ,_dir,   _adda ,_dir,     /* 98..9B */
+  _cpx  ,_dir,   _jsr  ,_dir,   _lds  ,_dir,   _sts  ,_dir,     /* 9C..9F */
+  _suba ,_ix8,   _cmpa ,_ix8,   _sbca ,_ix8,   _subd ,_ix8,     /* A0..A3 */
+  _anda ,_ix8,   _bita ,_ix8,   _lda  ,_ix8,   _sta  ,_ix8,     /* A4..A7 */
+  _eora ,_ix8,   _adca ,_ix8,   _ora  ,_ix8,   _adda ,_ix8,     /* A8..AB */
+  _cpx  ,_ix8,   _jsr  ,_ix8,   _lds  ,_ix8,   _sts  ,_ix8,     /* AC..AF */
+  _suba ,_ext,   _cmpa ,_ext,   _sbca ,_ext,   _subd ,_ext,     /* B0..B3 */
+  _anda ,_ext,   _bita ,_ext,   _lda  ,_ext,   _sta  ,_ext,     /* B4..B7 */
+  _eora ,_ext,   _adca ,_ext,   _ora  ,_ext,   _adda ,_ext,     /* B8..BB */
+  _cpx  ,_ext,   _jsr  ,_ext,   _lds  ,_ext,   _sts  ,_ext,     /* BC..BF */
+  _subb ,_imb,   _cmpb ,_imb,   _sbcb ,_imb,   _addd ,_imw,     /* C0..C3 */
+  _andb ,_imb,   _bitb ,_imb,   _ldb  ,_imb,   _ill  ,_nom,     /* C4..C7 */
+  _eorb ,_imb,   _adcb ,_imb,   _orb  ,_imb,   _addb ,_imb,     /* C8..CB */
+  _ldd  ,_imw,   _ill  ,_nom,   _ldx  ,_imw,   _ill  ,_nom,     /* CC..CF */
+  _subb ,_dir,   _cmpb ,_dir,   _sbcb ,_dir,   _addd ,_dir,     /* D0..D3 */
+  _andb ,_dir,   _bitb ,_dir,   _ldb  ,_dir,   _stb  ,_dir,     /* D4..D7 */
+  _eorb ,_dir,   _adcb ,_dir,   _orb  ,_dir,   _addb ,_dir,     /* D8..DB */
+  _ldd  ,_dir,   _std  ,_dir,   _ldx  ,_dir,   _stx  ,_dir,     /* DC..DF */
+  _subb ,_ix8,   _cmpb ,_ix8,   _sbcb ,_ix8,   _addd ,_ix8,     /* E0..E3 */
+  _andb ,_ix8,   _bitb ,_ix8,   _ldb  ,_ix8,   _stb  ,_ix8,     /* E4..E7 */
+  _eorb ,_ix8,   _adcb ,_ix8,   _orb  ,_ix8,   _addb ,_ix8,     /* E8..EB */
+  _ldd  ,_ix8,   _std  ,_ix8,   _ldx  ,_ix8,   _stx  ,_ix8,     /* EC..EF */
+  _subb ,_ext,   _cmpb ,_ext,   _sbcb ,_ext,   _addd ,_ext,     /* F0..F3 */
+  _andb ,_ext,   _bitb ,_ext,   _ldb  ,_ext,   _stb  ,_ext,     /* F4..F7 */
+  _eorb ,_ext,   _adcb ,_ext,   _orb  ,_ext,   _addb ,_ext,     /* F8..FB */
+  _ldd  ,_ext,   _std  ,_ext,   _ldx  ,_ext,   _stx  ,_ext,     /* FC..FF */
+  };
 
 char *bit_r[] = {"CC","A","B","??"};
 
 char *block_r[] =
   {
   "D","X","Y","U","S","?","?","?","?","?","?","?","?","?","?","?"
-  };
-
-char *off4[] =
-  {
-    "0",  "1",  "2",  "3",  "4",  "5",  "6",  "7",
-    "8",  "9", "10", "11", "12", "13", "14", "15",
-  "-16","-15","-14","-13","-12","-11","-10", "-9",
-   "-8", "-7", "-6", "-5", "-4", "-3", "-2", "-1"
   };
 
 char reg[] = { 'X', 'Y', 'U', 'S' };
@@ -536,6 +789,71 @@ switch (addr)
     return NULL;
   }
 return NULL;
+}
+
+/*****************************************************************************/
+/* GetPhaseDef : return the phase definition for a given address             */
+/*****************************************************************************/
+
+int GetPhaseDef(word addr)
+{
+int i;
+for (i = 0; i < numphases; i++)
+  if (addr >= phases[i].from && addr <= phases[i].to)
+    return i;
+return -1;
+}
+
+/*****************************************************************************/
+/* PhaseInner : "phase" an address if it's inside the current range          */
+/*****************************************************************************/
+
+word PhaseInner(word W, word addr)
+{
+int i;
+for (i = numphases - 1; i >= 0; i--)
+  {
+  word from = phases[i].from;
+  if (addr >= from && addr <= phases[i].to)
+    {
+    word phase = phases[i].phase;
+    word phend = phase + phases[i].to - phases[i].from;
+    /* if we're dealing with a relative phase, fetch outer phase's boundaries */
+    if (phases[i].rel)
+      {
+      from = phases[phases[i].phase].from;
+      phase = phases[phases[i].phase].phase;
+      phend = phase + phases[phases[i].phase].to - phases[phases[i].phase].from;
+      }
+    if ((W >= phase && W <= phend) ||
+        phases[i].rel)                  /* relative phases are ALWAYS phased */
+      return W - phase + from + phases[i].rel;
+    }
+  }
+return W;
+}
+
+/*****************************************************************************/
+/* DephaseOuter : "de-phase" an address if it's outside the current range    */
+/*****************************************************************************/
+
+word DephaseOuter(word W, word addr)
+{
+int i;
+for (i = numphases - 1; i >= 0; i--)
+  {
+  word from = phases[i].from;
+  word to = phases[i].to;
+  if (addr >= from && addr <= to &&
+      (W < from || W > to))
+    {
+    if (phases[i].rel)
+      return W + phases[i].rel;
+    else
+      return W - from + phases[i].phase;
+    }
+  }
+return W;
 }
 
 /*****************************************************************************/
@@ -820,13 +1138,16 @@ static char s[18];                      /* buffer for a binary word max.     */
 
 if ((nDigits == 2) &&                   /* if 2-digit value                  */
     (IS_CHAR(addr)))                    /* and character output requested    */
-{
-  if((W>0x1f)&&(W<0x7f))
+  {
+  if (isprint(W))
+#if RB_VARIANT
     sprintf(s, "'%c'", W);
+#else
+    sprintf(s, "'%c", W);
+#endif
   else
     sprintf(s, "$%02x", W);
-}
-
+  }
 else if (IS_BINARY(addr))               /* if a binary                       */
   {
   int nBit;
@@ -874,7 +1195,7 @@ word Wrel = W + rels[addr];
 char *p;
                                         /* get label name                    */
 p = (bUseLabel) ? label_at(Wrel) : NULL;
-if ((Wrel == W) && (p))                 /* if there and absolute                                  */
+if ((Wrel == W) && (p))                 /* if there and absolute             */
   return p;                             /* return it                         */
 
 if (p)
@@ -971,7 +1292,6 @@ if (T & 0x80)
         {
         bGetLabel = !IS_CONST(PC - 1);
         sprintf(buf + 2, "   %c (%s)", cCommChar,
-                //label_string(0, bGetLabel, (word)(PC - 1)), R);
                 label_string(0, bGetLabel, (word)(PC - 1)));
         }
       break;
@@ -1006,16 +1326,16 @@ if (T & 0x80)
       if ((Wrel != W) || (label_at(Wrel)))
         {
         if ((W < 0x80) || (W >= 0xff80))
-          sprintf(buf, "%s,%c", label_string(W, bGetLabel, (word)(PC - 2)), R);
+          sprintf(buf, "%s%s,%c", forceextendedaddr, label_string(W, bGetLabel, (word)(PC - 2)), R);
         else
           sprintf(buf, "%s,%c", label_string(W, bGetLabel, (word)(PC - 2)), R);
         }
       else
         {
         if ((W < 0x80) || (W >= 0xff80))
-          sprintf(buf, "%s,%c", signed_string((int)(short)W, 4, (word)(PC - 2)), R);
+          sprintf(buf, "%s%s,%c", forceextendedaddr, signed_string((int)(short)W, 4, (word)(PC - 2)), R);
         else
-          sprintf(buf, "%s,%c", number_string((int)(short)W, 4, (word)(PC - 2)), R);  // RB: this was "signed_string"
+          sprintf(buf, "%s,%c", number_string((word)(int)(short)W, 4, (word)(PC - 2)), R);  /* RB: this was "signed_string" */
         }
       break;
     case 0x0B:
@@ -1039,7 +1359,7 @@ if (T & 0x80)
       W = ARGWORD(PC);
       PC += 2;
       if ((W < 0x80) || (W >= 0xff80))
-        sprintf(buf, "%s,PCR", label_string((word)(W + PC), bGetLabel, (word)(PC - 2)));
+        sprintf(buf, "%s%s,PCR", forceextendedaddr, label_string((word)(W + PC), bGetLabel, (word)(PC - 2)));
       else
         sprintf(buf, "%s,PCR", label_string((word)(W + PC), bGetLabel, (word)(PC - 2)));
       break;
@@ -1193,9 +1513,6 @@ if (T & 0x80)
   }
 else
   {
-#if 0
-  sprintf(buf,"%s,%c", off4[T & 0x1F], R);
-#else
   char c = T & 0x1F;
   if (c & 0x10)
     c |= 0xf0;
@@ -1206,11 +1523,22 @@ else
     }
   else
     sprintf(buf,"%s,%c", signed_string(c, 2, (word)(PC - 1)), R);
-#endif
   }
 
 strcat(buffer,buf);
 return(PC);
+}
+
+/*****************************************************************************/
+/* GetDirPage : returns the direct page set for a given address              */
+/*****************************************************************************/
+
+int GetDirPage(int nAddr)
+{
+int nDP = dps[nAddr];
+if (nDP > 0xff)
+  nDP = dirpage;
+return nDP;
 }
 
 /*****************************************************************************/
@@ -1225,6 +1553,7 @@ int MI;
 char *I;
 unsigned PC = pc;
 byte bSetLabel = 1;
+int dp = GetDirPage(pc);
 
 O = T = OPCODE(PC);
 PC++;
@@ -1276,17 +1605,24 @@ switch(M)
     bSetLabel = !IS_CONST(PC);
     W = ARGWORD(PC); PC+=2;
     if (bSetLabel)
+      {
+      W = PhaseInner(W, (word)(PC - 2));
       AddLabel(MI, W);
+      }
     break;
 
   case _dir:
     bSetLabel = !IS_CONST(PC);
-    T = ARGBYTE(PC); PC++;
-    if (dirpage >= 0)
+    T = ARGBYTE(PC);
+    PC++;
+    if (dp >= 0)
       {
-      W = (word)((dirpage << 8) | T);
+      W = (word)((dp << 8) | T);
       if (bSetLabel)
+        {
+        W = PhaseInner(W, (word)(PC - 1));
         AddLabel(MI, W);
+        }
       }
     break;
 
@@ -1294,7 +1630,10 @@ switch(M)
     bSetLabel = !IS_CONST(PC);
     W = ARGWORD(PC); PC += 2;
     if (bSetLabel)
+      {
+      W = PhaseInner(W, (word)(PC - 2));
       AddLabel(MI, W);
+      }
     break;
 
   case _ind:
@@ -1310,7 +1649,10 @@ switch(M)
     T = ARGBYTE(PC); PC++;
     W = (word)(PC + (signed char)T);
     if (bSetLabel)
+      {
+      W = DephaseOuter(W, (word)(PC - 1));
       AddLabel(MI, W);
+      }
     break;
 
   case _rew:
@@ -1318,7 +1660,10 @@ switch(M)
     W = ARGWORD(PC); PC += 2;
     W += (word)PC;
     if (bSetLabel)
+      {
+      W = DephaseOuter(W, (word)(PC - 2));
       AddLabel(MI, W);
+      }
     break;
 
   case _r1:
@@ -1333,12 +1678,16 @@ switch(M)
   case _bd:
     M = ARGBYTE(PC); PC++;
     bSetLabel = !IS_CONST(PC);
-    T = ARGBYTE(PC); PC++;
-    if (dirpage >= 0)
+    T = ARGBYTE(PC);
+    PC++;
+    if (dp >= 0)
       {
-      W = (word)((dirpage << 8) | T);
+      W = (word)((dp << 8) | T);
       if (bSetLabel)
+        {
+        W = PhaseInner(W, (word)(PC - 1));
         AddLabel(MI, W);
+        }
       }
     break;
 
@@ -1347,7 +1696,10 @@ switch(M)
     bSetLabel = !IS_CONST(PC);
     W = ARGWORD(PC); PC+=2;
     if (bSetLabel)
+      {
+      W = PhaseInner(W, (word)(PC - 2));
       AddLabel(MI, W);
+      }
     break;
 
   case _bt:
@@ -1382,6 +1734,11 @@ switch(M)
     PC = index_parse(MI,PC);
     break;
 
+  case _dom:
+    T = ARGBYTE(PC); PC++;
+    M = ARGBYTE(PC); PC++;
+    break;
+
   default:
     break;
   }
@@ -1401,6 +1758,7 @@ char *I;
 char buf[256];
 unsigned PC = pc;
 char bGetLabel;
+int dp = GetDirPage(pc);
 
 O = T = OPCODE(PC);
 PC++;
@@ -1452,10 +1810,10 @@ switch (M)
       W = 0;
     switch (W)
       {
-      case 0x4456 :
+      case 0x4456 :                     /* LSRA + RORB                       */
         sprintf(buffer, "%s", mnemo[_lsrd].mne); PC++;
         break;
-      case 0x5849 :
+      case 0x5849 :                     /* ASLB + ROLA                       */
         sprintf(buffer, "%s", mnemo[_asld].mne); PC++;
         break;
       default :
@@ -1473,43 +1831,43 @@ switch (M)
       W = 0;
     switch (W)                          /* examine for special CC settings   */
       {
-      case 0x1a01 :
+      case 0x1a01 :                     /* (6809) ORCC $01                   */
         sprintf(buffer, "%s", mnemo[_sec].mne);
         break;
-      case 0x1a02 :
+      case 0x1a02 :                     /* (6809) ORCC $02                   */
         sprintf(buffer, "%s", mnemo[_sev].mne);
         break;
-      case 0x1a04 :
+      case 0x1a04 :                     /* (6809) ORCC $04                   */
         sprintf(buffer, "%s", mnemo[_sez].mne);
         break;
-      case 0x1a10 :
+      case 0x1a10 :                     /* (6809) ORCC $10                   */
         sprintf(buffer, "%s", mnemo[_sei].mne);
         break;
-      case 0x1a40 :
+      case 0x1a40 :                     /* (6809) ORCC $40                   */
         sprintf(buffer, "SEF");
         break;
-      case 0x1a50 :
+      case 0x1a50 :                     /* (6809) ORCC $40+$10               */
         sprintf(buffer, "SEIF");
         break;
-      case 0x1cfe :
+      case 0x1cfe :                     /* (6809) ANDCC ~$01                 */
         sprintf(buffer, "%s", mnemo[_clc].mne);
         break;
-      case 0x1cfd :
+      case 0x1cfd :                     /* (6809) ANDCC ~$02                 */
         sprintf(buffer, "%s", mnemo[_clv].mne);
         break;
-      case 0x1cfb :
+      case 0x1cfb :                     /* (6809) ANDCC ~$04                 */
         sprintf(buffer, "CLZ");
         break;
-      case 0x1cef :
+      case 0x1cef :                     /* (6809) ANDCC ~$10                 */
         sprintf(buffer, "%s", mnemo[_cli].mne);
         break;
-      case 0x1cbf :
+      case 0x1cbf :                     /* (6809) ANDCC ~$40                 */
         sprintf(buffer, "CLF");
         break;
-      case 0x1caf :
+      case 0x1caf :                     /* (6809) ANDCC ~($40 + $10)         */
         sprintf(buffer, "CLIF");
         break;
-      case 0x3cff :
+      case 0x3cff :                     /* (6809) CWAI $FF                   */
         sprintf(buffer, "%s", mnemo[_wai].mne);
         break;
       default :
@@ -1521,6 +1879,8 @@ switch (M)
     bGetLabel = !IS_CONST(PC);
     W = ARGWORD(PC);
     PC += 2;
+    if (bGetLabel)
+      W = PhaseInner(W, (word)(PC - 2));
     sprintf(buffer,"%-7s #%s", I, label_string(W, bGetLabel, (word)(PC - 2)));
     break;
 
@@ -1528,9 +1888,11 @@ switch (M)
     bGetLabel = !IS_CONST(PC);
     T = ARGBYTE(PC);
     PC++;
-    if (dirpage >= 0)
+    if (dp >= 0)
       {
-      W = (word)((dirpage << 8) | T);
+      W = (word)((dp << 8) | T);
+      if (bGetLabel)
+        W = PhaseInner(W, (word)(PC - 1));
       sprintf(buffer, "%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 1)));
       }
     else
@@ -1540,43 +1902,45 @@ switch (M)
   case _ext:
     bGetLabel = !IS_CONST(PC);
     W = ARGWORD(PC);
+    if (bGetLabel)
+      W = PhaseInner(W, (word)PC);
     PC += 2;
-    if ((dirpage >= 0) &&
-        ((W & (word)0xff00) == ((word)dirpage << 8)))
-      sprintf(buffer,"%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 2)));
+    if ((dp >= 0) &&
+        ((W & (word)0xff00) == ((word)dp << 8)))
+      sprintf(buffer,"%-7s %s%s", I, forceextendedaddr, label_string(W, bGetLabel, (word)(PC - 2)));
     else
       sprintf(buffer,"%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 2)));
     break;
 
-  case _ind:
+  case _ind:                            /* 6809 / 6309 only                  */
     if (useConvenience)
       W = (word)(O << 8) | OPCODE(PC);
     else
       W = 0;
     switch (W)
       {
-      case 0x3001 :
+      case 0x3001 :                     /* (6809) LEAX +1                    */
         sprintf(buffer, "%s", mnemo[_inx].mne); PC++;
         break;
-      case 0x301f :
+      case 0x301f :                     /* (6809) LEAX -1                    */
         sprintf(buffer, "%s", mnemo[_dex].mne); PC++;
         break;
-      case 0x3121 :
+      case 0x3121 :                     /* (6809) LEAY +1                    */
         sprintf(buffer, "INY"); PC++;
         break;
-      case 0x313f :
+      case 0x313f :                     /* (6809) LEAY -1                    */
         sprintf(buffer, "DEY"); PC++;
         break;
-      case 0x3261 :
+      case 0x3261 :                     /* (6809) LEAS +1                    */
         sprintf(buffer, "%s", mnemo[_ins].mne); PC++;
         break;
-      case 0x327f :
+      case 0x327f :                     /* (6809) LEAS -1                    */
         sprintf(buffer, "%s", mnemo[_des].mne); PC++;
         break;
-      case 0x3341 :
+      case 0x3341 :                     /* (6809) LEAU +1                    */
         sprintf(buffer, "INU"); PC++;
         break;
-      case 0x335f :
+      case 0x335f :                     /* (6809) LEAU -1                    */
         sprintf(buffer, "DEU"); PC++;
         break;
       default :
@@ -1595,9 +1959,10 @@ switch (M)
       {
       W = (int)((unsigned char)T) + rels[PC - 1];
       sprintf(buf, "%s,X",
-              label_string((word)((int)((char)T)), bGetLabel, (word)(PC - 1)));
+              label_string((word)((int)((unsigned char)T)), bGetLabel, (word)(PC - 1)));
       }
-    else if (!T)
+     /* omit '$00', unless the user has set the 'showzero' option */
+    else if (!T && !showIndexedModeZeroOperand)
       strcpy(buf, ",X");
     else
       sprintf(buf, "%s,X",
@@ -1613,6 +1978,7 @@ switch (M)
     if (bGetLabel)
       {
       W = (word)(PC + (signed char)T);
+      W = DephaseOuter(W, (word)(PC - 1));
       sprintf(buffer,"%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 1)));
       }
     else
@@ -1630,6 +1996,8 @@ switch (M)
     W = ARGWORD(PC);
     PC += 2;
     W += (word)PC;
+    if (bGetLabel)
+      W = DephaseOuter(W, (word)(PC - 2));
     sprintf(buffer,"%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 2)));
     break;
 
@@ -1640,10 +2008,10 @@ switch (M)
       W = 0;
     switch (W)
       {
-      case 0x1f14 :
+      case 0x1f14 :                     /* (6809) TFR X,S                    */
         sprintf(buffer, "%s", mnemo[_txs].mne); PC++;
         break;
-      case 0x1f41 :
+      case 0x1f41 :                     /* (6809) TFR S,X                    */
         sprintf(buffer, "%s", mnemo[_tsx].mne); PC++;
         break;
 /* hairy - some assemblers expand TAB to TAB + TSTA...
@@ -1651,7 +2019,7 @@ switch (M)
       case 0x1f89 :
         sprintf(buffer, "TAB"); PC++;
         break; */
-      case 0x1f8a :
+      case 0x1f8a :                     /* (6809) TFR A,CC                   */
         sprintf(buffer, "%s", mnemo[_tap].mne); PC++;
         break;
 /* hairy - some assemblers expand TBA to TBA + TSTA...
@@ -1659,7 +2027,7 @@ switch (M)
       case 0x1f98 :
         sprintf(buffer, "TBA"); PC++;
         break; */
-      case 0x1fa8 :
+      case 0x1fa8 :                     /* (6809) TFR CC,A                   */
         sprintf(buffer, "%s", mnemo[_tpa].mne); PC++;
         break;
       default :
@@ -1669,60 +2037,60 @@ switch (M)
       }
     break;
 
-  case _r2:
-  case _r3:
+  case _r2:                             /* 6809/6309 only                    */
+  case _r3:                             /* -"-                               */
     if (useConvenience)
       W = (word)(O << 8) | OPCODE(PC);
     else
       W = 0;
     switch (W)
       {
-      case 0x3404 :
+      case 0x3404 :                     /* (6809) PSHS B                     */
         if (IS_LABEL(PC + 1))
           W = 0;
         else
           W = (word)(OPCODE(PC + 1) << 8) | OPCODE(PC + 2);
         switch (W)
           {
-          case 0xa0e0 :
+          case 0xa0e0 :                 /* (6809) PSHS B / SUBA ,S++         */
             sprintf(buffer, "%s", mnemo[_sba].mne); PC += 3;
             break;
-          case 0xa1e0 :
+          case 0xa1e0 :                 /* (6809) PSHS B / CMPA ,S++         */
             sprintf(buffer, "%s", mnemo[_cba].mne); PC += 3;
             break;
-          case 0xabe0 :
-            sprintf(buffer,  "%s", mnemo[_aba].mne); PC += 3;
+          case 0xabe0 :                 /* (6809) PSHS B / ADDA ,S++         */
+            sprintf(buffer, "%s", mnemo[_aba].mne); PC += 3;
             break;
-          default:
+          default:                      /* (6809) PSHS B / anything else     */
             sprintf(buffer, "%s", mnemo[_pshb].mne); PC++;
             break;
           }
         break;
-      case 0x3402 :
+      case 0x3402 :                     /* (6809) PSHS A                     */
         sprintf(buffer, "%s", mnemo[_psha].mne); PC++;
         break;
-      case 0x3406 :
+      case 0x3406 :                     /* (6809) PSHS D                     */
         sprintf(buffer, "PSHD"); PC++;
         break;
-      case 0x3410 :
+      case 0x3410 :                     /* (6809) PSHS X                     */
         sprintf(buffer, "PSHX"); PC++;
         break;
-      case 0x3420 :
+      case 0x3420 :                     /* (6809) PSHS Y                     */
         sprintf(buffer, "PSHY"); PC++;
         break;
-      case 0x3502 :
+      case 0x3502 :                     /* (6809) PULS A                     */
         sprintf(buffer, "%s", mnemo[_pula].mne); PC++;
         break;
-      case 0x3504 :
+      case 0x3504 :                     /* (6809) PULS B                     */
         sprintf(buffer, "%s", mnemo[_pulb].mne); PC++;
         break;
-      case 0x3506 :
+      case 0x3506 :                     /* (6809) PULS D                     */
         sprintf(buffer, "PULD"); PC++;
         break;
-      case 0x3510 :
+      case 0x3510 :                     /* (6809) PULS X                     */
         sprintf(buffer, "PULX"); PC++;
         break;
-      case 0x3520 :
+      case 0x3520 :                     /* (6809) PULS Y                     */
         sprintf(buffer, "PULY"); PC++;
         break;
       default:
@@ -1765,11 +2133,14 @@ switch (M)
   case _bd:
     M = ARGBYTE(PC); PC++;
     bGetLabel = !IS_CONST(PC);
-    T = ARGBYTE(PC); PC++;
-    if (dirpage >= 0)
+    T = ARGBYTE(PC);
+    PC++;
+    if (dp >= 0)
       {
       char mBuf[20];
-      W = (word)((dirpage << 8) | T);
+      W = (word)((dp << 8) | T);
+      if (bGetLabel)
+        W = PhaseInner(W, (word)(PC - 1));
       strcpy(mBuf, number_string(M, 2, (word)(PC - 2)));
       sprintf(buffer,
               "%-7s #%s,%s",
@@ -1790,19 +2161,23 @@ switch (M)
     break;
 
   case _be:
-    T = ARGBYTE(PC); PC++;
+    T = ARGBYTE(PC);
+    PC++;
     bGetLabel = !IS_CONST(PC);
-    W = ARGWORD(PC); PC += 2;
+    W = ARGWORD(PC);
+    if (bGetLabel)
+      W = PhaseInner(W, (word)PC);
+    PC += 2;
     {
     char tBuf[20];
     strcpy(tBuf, number_string(T, 2, (word)(PC - 3)));
-    if ((dirpage >= 0) &&
-        ((W & (word)0xff00) == ((word)dirpage << 8)))
+    if ((dp >= 0) &&
+        ((W & (word)0xff00) == ((word)dp << 8)))
       sprintf(buffer,
-              "%-7s #%s,%s",
+              "%-7s #%s,%s%s",
               I,
               tBuf,
-              label_string(W, bGetLabel, (word)(PC - 2)));
+              forceextendedaddr, label_string(W, bGetLabel, (word)(PC - 2)));
     else
       sprintf(buffer,
               "%-7s #%s,%s",
@@ -1815,23 +2190,13 @@ switch (M)
   case _bt:
     M = ARGBYTE(PC); PC++;
     T = ARGBYTE(PC); PC++;
-#if 1
     sprintf(buffer,
-            "%-7s %s,%d,%d,<%s",
+            "%-7s %s,%d,%d,%s%s",
             I,
             bit_r[M >> 6],
             (M >> 3) & 7,
             M & 7,
-            number_string(T, 2, (word)(PC - 1)));
-#else
-    sprintf(buffer,
-            "%-7s %s,%d,%d,%s",
-            I,
-            bit_r[M >> 6],
-            (M >> 3) & 7,
-            M & 7,
-            number_string(T, 2, (word)(PC - 1)));
-#endif
+            forcedirectaddr, number_string(T, 2, (word)(PC - 1)));
     break;
 
   case _t1:
@@ -1867,21 +2232,24 @@ switch (M)
     PC = index_string(buffer,PC);
     break;
 
+  case _dom:
+    T = ARGBYTE(PC); PC++;
+    M = ARGBYTE(PC); PC++;
+    sprintf(buffer, "%-7s %02x,%s", I, T, number_string(M, 2, (word)(PC-1)));
+    break;
+
   default:
     sprintf(buffer,"%-7s ERROR",I);
   }
 
-  // increased readabilty
-  // prepare divider after jumps (but not subroutine calls)
-  if(
-    (strcmp(I,"RTI")==0) ||
-    (strcmp(I,"RTS")==0) ||
-    ( (strncmp(I,"PUL",3)==0) && (T&0x80) ) ||  // PULx PC
-    (strncmp(I,"JMP",3)==0) ||
-    (strncmp(I,"BRA",3)==0) ||
-    (strncmp(I,"SWI",3)==0)
-  )
-    trenner=1;
+/* increased readability: divider after jumps (but not subroutine calls)     */
+if (!strcmp(I,"RTI") ||
+    !strcmp(I,"RTS") ||
+    (!strncmp(I, "PUL", 3) && (T & 0x80)) ||  /* PULx PC */
+    !strncmp(I, "JMP", 3) ||
+    !strncmp(I, "BRA", 3) ||
+    !strncmp(I," SWI", 3) )
+  optdelimbar = TRUE;
 
 return (PC - pc);
 }
@@ -1933,7 +2301,10 @@ else if (IS_WORD(pc))
   wf |= SHMF_WORD;
 else if (IS_BINARY(pc))
   ;
-else if (IS_CHAR(pc))
+else
+#if RB_VARIANT
+    if (IS_CHAR(pc))
+#endif
   {
   if ((memory[pc] >= 0x20) &&
       (memory[pc] <= 0x7e) &&
@@ -1967,11 +2338,12 @@ wfCur = ShowMemFlags(pc) &              /* get flags for current byte        */
 
 for (end = pc + 1; ; end++)             /* find end of block                 */
   {
-
-  // RB: don't overrun labels ...
-  if(IS_LABEL(end))
-    break;
-
+  if(IS_LABEL(end))                     /* RB: don't overrun labels ...      */
+    {                                   /* HS: unless they're displacements! */
+    char *slabel = label_string((word)end, 1, (word)end);
+    if (!strchr(slabel, '+') && !strchr(slabel, '-'))
+      break;
+    }
   wfEnd = ShowMemFlags(end);
 #if 0
   if ((wfEnd & SHMF_TXT) &&             /* suppress ONE text character       */
@@ -1989,7 +2361,7 @@ if (wfCur & SHMF_RMB)                   /* if reserved memory block          */
   i = end;
   j = fprintf(out, "%s", number_string((word)(i - pc), 4, (word)pc));
   }
-else if (wfCur & SHMF_TXT)              /* if FCC (text)                     */
+else if (usefcc && (wfCur & SHMF_TXT))  /* if FCC (text)                     */
   {
   fprintf(out, "%-7s \"", "FCC");       /* start the game                    */
   for (i = pc, j = 1; i < end; i++)     /* now print out the characters      */
@@ -2024,7 +2396,6 @@ else if (wfCur & SHMF_WORD)             /* if word data                      */
 else                                    /* if FCB (hex or binary)            */
   {
   char *s;
-
   fprintf(out, "%-7s ", "FCB");         /* start the game                    */
   for (i = pc, j = 0; i < end; i++)     /* now print out the characters      */
     {
@@ -2052,12 +2423,10 @@ void infousage(void)
 {
 printf("\n"
        "Info file contents:\n"
-//       "Consists of text records of one of the following formats:\n"
+#if RB_VARIANT
       "\nLabel file comments\n"
        "\t* comment line\n"
        "\t; comment line\n"
-//      "\nWill figure this out later ...\n"
-//       "\tOPTION option (like command line, without leading -)\n"
       "\nOutput control\n"
        "\tPREPEND [addr[-addr]] text to be prepended to the output\n"
        "\tPREPCOMM [addr[-addr]] comment text to be prepended to the output\n"
@@ -2072,14 +2441,21 @@ printf("\n"
        "\tconstants in memory:CONST from[-to] (like hex)\n"
        "\tchar data area:     CHAR from[-to] (like hex, but ASCII if possible)\n"
        "\tword data area:     WORD from[-to] (like hex, but 16 bit)\n"
+       "\tcode vector area:   CVEC[TOR] from[-to]\n"
+       "\t                    (like WORD, but adds target labels if necessary)\n"
+       "\tdata vector area:   DVEC[TOR] from[-to]\n"
+       "\t                    (like WORD, but adds target labels if necessary)\n"
       "\nAddressing control\n"
-       "\tset DP value:       SETDP DP-content (last one is used)\n"
+      "\tset DP value:       SETDP [addr[-addr]] DP-content\n"
+      "\t                    (without addr, last one is used)\n"
        "\tforce addressing relative to base:\n"
        "\t\t\t    REL[ATIVE] addr[-addr] baseaddr\n"
        "\tunset relative addressing:\n"
        "\t\t\t    UNREL[ATIVE] addr[-addr]\n"
        "\tmap memory addresses to different base:\n"
        "\t\t\t    REMAP addr[-addr] offset\n"
+       "\tmap file contents to different base:\n"
+       "\t\t\t    PHASE addr[-addr] phase\n"
       "\nLabel control\n"
        "\tdefine label:       LABEL addr name\n"
        "\tremove label:       UNLABEL addr[-addr]\n"
@@ -2100,6 +2476,42 @@ printf("\n"
        "\tinclude label file: INCLUDE filename\n"
        "\tload binary file:   FILE filename [baseaddr]\n"
        "\tstop parsing:       END\n"
+#else
+       "Consists of text records of one of the following formats:\n"
+       "* comment line\n"
+       "FILE filename [baseaddr]\n"
+       "OPTION option (like command line, without leading -)\n"
+       "PREPEND [addr[-addr]] text to be prepended to the output\n"
+       "PREPCOMM [addr[-addr]] comment text to be prepended to the output\n"
+       "DATA from[-to]\n"
+       "BIN[ARY] from[-to] (forced binary data)\n"
+       "DEC[IMAL] from[-to] (forced decimal data)\n"
+       "HEX[ADECIMAL] from[-to] (forced hex data)\n"
+       "CHAR from[-to] (forced character data, only if no WORD area)\n"
+       "WORD from[-to] (forced word data)\n"
+       "CVEC[TOR] from[-to] (forced code vectors)\n"
+       "DVEC[TOR] from[-to] (forced data vectors)\n"
+       "CODE from[-to]\n"
+       "CONST from[-to]\n"
+       "UNUSED from[-to]\n"
+       "RMB from-to\n"
+       "LABEL addr name\n"
+       "USED[LABEL] addr  (forces a label to \"Used\")\n"
+       "UNLABEL addr[-addr]\n"
+       "COMMENT addr[-addr] embedded comment line\n"
+       "UNCOMMENT addr[-addr]\n"
+       "LCOMMENT addr[-addr] appended line comment\n"
+       "PREPLCOMM[ENT] addr[-addr] prepended line comment\n"
+       "UNLCOMMENT addr[-addr]\n"
+       "INSERT addr[-addr] embedded line\n"
+       "INCLUDE filename\n"
+       "SETDP [addr[-addr]] DP-content (without addr, last definition is used)\n"
+       "REL[ATIVE] addr[-addr] bsaddr\n"
+       "UNREL[ATIVE] addr[-addr]\n"
+       "REMAP addr[-addr] offset\n"
+       "PHASE addr[-addr] phase\n"
+       "END\n"
+#endif
        );
 }
 
@@ -2119,11 +2531,15 @@ printf("Usage: f9dasm [options] <filename>\n"
        " -hex       - with hex dump (default)\n"
        " -nohex     - no hex dump\n"
        " -x         - use 6309 opcodes (old style)\n"
+       " -6301      - use 6301/6303 opcodes\n"
        " -6309      - use 6309 opcodes\n"
-       " -6800      - use 6800 opcodes\n"
+       " -6800      - use 6800/6802/6808 opcodes\n"
+       " -6801      - use 6801/6803 opcodes\n"
+       " -68HC11    - use 68HC11 opcodes\n"
        " -os9       - patch swi2 (os9 call)\n"
        " -info      - file with additional information [empty]\n"
-       " -cchar     - comment delimiter characters [*]\n"
+       "              \"-info help\" shows info file help\n"
+       " -cchar     - comment delimiter character [*]\n"
        " -flex      - use FLEX9 standard labels (default)\n"
        " -noflex    - do not use FLEX9 standard labels\n"
        " -conv      - use convenience mnemonics (default)\n"
@@ -2132,6 +2548,15 @@ printf("Usage: f9dasm [options] <filename>\n"
        " -nodec     - output values in hex (default)\n"
        " -comment   - output comments (default)\n"
        " -nocomment - omit output of comments\n"
+       " -asc       - output ASCII rendering of code/data (default)\n"
+       " -noasc     - omit output of ASCII rendering of code/data\n"
+       " -fcc       - use FCC to define data (default)\n"
+       " -nofcc     - do not use FCC to define data (instead using FCB or FDB)\n"
+       " -omitzero  - omit indexed-mode operands of $00 (default)\n"
+       " -showzero  - do not omit indexed-mode operands of $00\n"
+       " -forced    - set forced direct / extended addressing markers (default)\n"
+       " -noforced  - don't set forced direct / extended addressing markers\n"
+       " -ldchar    - label delimiter character [ ]\n"
        " -help      - output more extensive help and quit\n"
        "All values should be entered in hexadecimal\n");
 
@@ -2195,13 +2620,38 @@ switch (j)
   case OPTION_NOHEX :
     showhex = FALSE;
     break;
+
+  case OPTION_6301 :
+    mnemo[_lda].mne   = "LDAA";         /* adjust slight mnemo differences   */
+    mnemo[_ldb].mne   = "LDAB";
+    mnemo[_sta].mne   = "STAA";
+    mnemo[_stb].mne   = "STAB";
+    mnemo[_ora].mne   = "ORAA";
+    mnemo[_orb].mne   = "ORAB";
+
+    codes             = m6301_codes;
+    codes10           = NULL;
+    codes11           = NULL;
+    exg_tfr           = m6809_exg_tfr;
+    dirpage           = 0;
+    useConvenience    = FALSE;
+    break;
+
   case OPTION_6309 :
+    mnemo[_lda].mne   = "LDA";          /* adjust slight mnemo differences   */
+    mnemo[_ldb].mne   = "LDB";
+    mnemo[_sta].mne   = "STA";
+    mnemo[_stb].mne   = "STB";
+    mnemo[_ora].mne   = "ORA";
+    mnemo[_orb].mne   = "ORB";
+
     codes             = h6309_codes;
     codes10           = h6309_codes10;
     codes11           = h6309_codes11;
     exg_tfr           = h6309_exg_tfr;
     allow_6309_codes  = TRUE;
     break;
+
   case OPTION_6800 :
     mnemo[_lda].mne   = "LDAA";         /* adjust slight mnemo differences   */
     mnemo[_ldb].mne   = "LDAB";
@@ -2213,9 +2663,57 @@ switch (j)
     codes             = m6800_codes;
     codes10           = NULL;
     codes11           = NULL;
+    exg_tfr           = m6809_exg_tfr;
     dirpage           = 0;              /* 6800 uses DP 0, fixed             */
     useConvenience    = FALSE;          /* NO Convenience ops!               */
     break;
+
+  case OPTION_6801 :
+    mnemo[_lda].mne   = "LDAA";         /* adjust slight mnemo differences   */
+    mnemo[_ldb].mne   = "LDAB";
+    mnemo[_sta].mne   = "STAA";
+    mnemo[_stb].mne   = "STAB";
+    mnemo[_ora].mne   = "ORAA";
+    mnemo[_orb].mne   = "ORAB";
+
+    codes             = m6801_codes;
+    codes10           = NULL;
+    codes11           = NULL;
+    exg_tfr           = m6809_exg_tfr;
+    dirpage           = 0;
+    useConvenience    = FALSE;
+    break;
+
+  case OPTION_6809 :
+    mnemo[_lda].mne   = "LDA";          /* adjust slight mnemo differences   */
+    mnemo[_ldb].mne   = "LDB";
+    mnemo[_sta].mne   = "STA";
+    mnemo[_stb].mne   = "STB";
+    mnemo[_ora].mne   = "ORA";
+    mnemo[_orb].mne   = "ORB";
+
+    codes             = m6809_codes;
+    codes10           = m6809_codes10;
+    codes11           = m6809_codes11;
+    exg_tfr           = m6809_exg_tfr;
+    allow_6309_codes  = FALSE;
+    break;
+
+  case OPTION_68HC11 :
+    mnemo[_lda].mne   = "LDA";          /* adjust slight mnemo differences   */
+    mnemo[_ldb].mne   = "LDB";
+    mnemo[_sta].mne   = "STA";
+    mnemo[_stb].mne   = "STB";
+    mnemo[_ora].mne   = "ORA";
+    mnemo[_orb].mne   = "ORB";
+
+    codes             = m68hc11_codes;
+    codes10           = NULL;
+    codes11           = NULL;
+    exg_tfr           = m6809_exg_tfr;
+    allow_6309_codes  = FALSE;
+  break;
+
   case OPTION_OS9 :
     os9_patch = TRUE;
     break;
@@ -2228,11 +2726,15 @@ switch (j)
     infoname = strdup(value);
     break;
   case OPTION_CCHAR :
+  case OPTION_LDCHAR :
     nAdd++;
     if ((!value) ||
       (strlen(value) > 1))
       usage(1);
-    cCommChar = value[0];
+    if (j == OPTION_CCHAR)
+      cCommChar = value[0];
+    else if (j == OPTION_LDCHAR)
+      cLblDelim = value[0];
     break;
   case OPTION_ASC :
     showasc = TRUE;
@@ -2248,7 +2750,7 @@ switch (j)
     break;
   case OPTION_CONV :
                                         /* only if not in 6800 mode          */
-    useConvenience = (codes != m6800_codes);
+    useConvenience = (codes != m6800_codes  && codes != m6801_codes);
     break;
   case OPTION_NOCONV :
     useConvenience = FALSE;
@@ -2264,6 +2766,26 @@ switch (j)
     break;
   case OPTION_NOCOMMENT :
     emitComments = FALSE;
+    break;
+  case OPTION_FCC :
+    usefcc = TRUE;
+    break;
+  case OPTION_NOFCC :
+    usefcc = FALSE;
+    break;
+  case OPTION_OMITZERO :
+    showIndexedModeZeroOperand = FALSE;
+    break;
+  case OPTION_SHOWZERO :
+    showIndexedModeZeroOperand = TRUE;
+    break;
+  case OPTION_FORCED :
+    forcedirectaddr = "<";
+    forceextendedaddr = ">";
+    break;
+  case OPTION_NOFORCED :
+    forcedirectaddr = "";
+    forceextendedaddr = "";
     break;
   case OPTION_HELP :
     usage(0);
@@ -2521,9 +3043,9 @@ if (fgetc(f) != EOF)                    /* if not read through the whole file*/
 fseek(f, nCurPos, SEEK_SET);
 if (nRecs > 0)
   {
-  if (begin < *pbegin)
+  if (begin < (int)(*pbegin))
     *pbegin = begin;
-  if (end > *pend)
+  if (end > (int)*pend)
     *pend = end;
   sLoadType = "FLEX";
   }
@@ -2561,13 +3083,16 @@ return out;
 /* IsIntelHex : tries to load as an Intel HEX file                           */
 /*****************************************************************************/
 
-int IsIntelHex(FILE *f, byte *memory, unsigned *pbegin, unsigned *pend)
+int IsIntelHex(FILE *f, byte *memory, unsigned *pbegin, unsigned *pend, int *pload)
 {
 int nCurPos = ftell(f);
-int c = 0;
+int c = 0, rectype;
+int done = 0;
 int nBytes = 0;
 int begin = 0xffff;
 int end = 0;
+int segment = 0;                        /* segment address                   */
+int load = -1;
 
 if ((c = fgetc(f)) == EOF)              /* look whether starting with ':'    */
   return FALSE;
@@ -2575,7 +3100,8 @@ fseek(f, nCurPos, SEEK_SET);
 if (c != ':')
   return FALSE;
 
-while ((nBytes >= 0) &&
+while ((!done) &&
+       (nBytes >= 0) &&
        (fread(&c, 1, 1, f)))            /* while there are lines             */
   {
   int nBytesOnLine, nAddr, i;
@@ -2586,7 +3112,7 @@ while ((nBytes >= 0) &&
     { nBytes = -1; break; }             /* return with error                 */
   else if (nBytesOnLine == 0)           /* if end of file                    */
     break;                              /* just break;                       */
-  nAddr = GetHex(f,4);                  /* get address for bytes             */
+  nAddr = GetHex(f,4) + segment;        /* get address for bytes             */
   if ((nAddr < 0) || (nAddr >= 0x10000)) /* if illegal address               */
     { nBytes = -1; break; }             /* return with error                 */
   if (nAddr < begin)                    /* adjust start and end values       */
@@ -2594,16 +3120,59 @@ while ((nBytes >= 0) &&
   if (nAddr + nBytesOnLine - 1 > end)
     end = nAddr + nBytesOnLine - 1;
   nBytes += nBytesOnLine;
-  c = GetHex(f, 2);                     /* skip a character                  */
-  for (i = 0; i < nBytesOnLine; i++)    /* now get the bytes                 */
+  rectype = GetHex(f, 2);               /* fetch record type character       */
+  switch (rectype)                      /* which type of record is this?     */
     {
-    c = GetHex(f, 2);                   /* retrieve a byte                   */
-    if ((c < 0) || (c > 0xff))          /* if illegal byte                   */
-      { nBytes = -1; break; }           /* return with error                 */
-    memory[nAddr + i] = (byte)c;        /* otherwise add memory byte         */
-    SET_USED(nAddr + i);                /* mark as used byte                 */
-    ATTRBYTE(nAddr + i) |= defaultDataType;
+    case 0 :                            /* data record                       */
+      for (i = 0; i<nBytesOnLine; i++)  /* now get the bytes                 */
+        {
+        c = GetHex(f, 2);               /* retrieve a byte                   */
+        if ((c < 0) || (c > 0xff))      /* if illegal byte                   */
+          { nBytes = -1; break; }       /* return with error                 */
+        memory[nAddr + i] = (byte)c;    /* otherwise add memory byte         */
+        SET_USED(nAddr + i);            /* mark as used byte                 */
+        ATTRBYTE(nAddr + i) |= defaultDataType;
+        }
+      break;
+    case 1 :                            /* End Of File record                */
+      done = 1;
+      break;
+    case 2 :                            /* Extended Segment Address          */
+      segment = GetHex(f, 4);           /* get segment value to use          */
+      segment <<= 4;                    /* convert to linear addition value  */
+      if (segment < 0 || segment >= 0x10000)
+        nBytes = -1;                    /* stop processing                   */
+      break;
+    case 3 :                            /* Start Segment Address             */
+      segment = GetHex(f, 4);           /* get segment value to use          */
+      segment <<= 4;                    /* convert to linear addition value  */
+      nAddr = GetHex(f, 4) + segment;   /* get start instruction pointer     */
+      if ((nAddr < 0) || (nAddr >= 0x10000)) /* if illegal address           */
+        nBytes = -1;                    /* return with error                 */
+      else
+        load = nAddr;
+      break;
+    case 4 :                            /* Extended Linear Address           */
+      segment = GetHex(f, 4);           /* get segment value to use          */
+      segment <<= 16;                   /* convert to linear addition value  */
+      if (segment < 0 || segment >= 0x10000)
+        nBytes = -1;                    /* stop processing                   */
+      break;
+    case 5 :                            /* Start Linear Address              */
+      nAddr = GetHex(f, 8);             /* get start instruction pointer     */
+      if ((nAddr < 0) || (nAddr >= 0x10000)) /* if illegal address           */
+        nBytes = -1;                    /* return with error                 */
+      else
+        load = nAddr;
+      break;
+    default :                           /* anything else?                    */
+      nBytes = -1;                      /* unknown format. stop processing   */
+      break;
     }
+
+  /* ignore checksum byte; its calculation would be:
+     add up all decoded bytes after the ':',
+     take 2's complement of lowest byte */
 
   while (((c = fgetc(f)) != EOF) &&     /* skip to newline                   */
          (c != '\r') && (c != '\n'))
@@ -2619,10 +3188,12 @@ while ((nBytes >= 0) &&
 fseek(f, nCurPos, SEEK_SET);
 if (nBytes >= 0)
   {
-  if (begin < *pbegin)
+  if (begin < (int)*pbegin)
     *pbegin = begin;
-  if (end > *pend)
+  if (end > (int)*pend)
     *pend = end;
+  if (load >= 0)
+    *pload = load;
   }
 
 if (nBytes > 0)
@@ -2634,7 +3205,7 @@ return (nBytes > 0);                    /* pass back #bytes interpreted      */
 /* IsMotorolaHex : tries to load as a Motorola HEX file                      */
 /*****************************************************************************/
 
-int IsMotorolaHex(FILE *f, byte *memory, unsigned *pbegin, unsigned *pend, unsigned *pload)
+int IsMotorolaHex(FILE *f, byte *memory, unsigned *pbegin, unsigned *pend, int *pload)
 {
 int nCurPos = ftell(f);
 int c = 0;
@@ -2666,13 +3237,17 @@ while ((!done) &&
   switch (nLineType)                    /* now examine line type             */
     {
     case '0' :
+#if 0                                   /* simply ignore the rest of the line*/
       nBytesOnLine--;
       while (nBytesOnLine--)
         GetHex(f, 2);
+#endif
       break;
-    case '1' :
+    case '1' :                          /* record with 16bit address         */
       nBytesOnLine -= 3;
       nAddr = GetHex(f,4);              /* get address for bytes             */
+    data16bit:
+      /* this program only deals with 16bit data, so restrict to 0-$FFFF     */
       if ((nAddr < 0) || (nAddr >= 0x10000)) /* if illegal address           */
         { nBytes = -1; break; }         /* return with error                 */
       if (nAddr < begin)                /* adjust start and end values       */
@@ -2691,10 +3266,34 @@ while ((!done) &&
         ATTRBYTE(nAddr + i) |= defaultDataType;
         }
       break;
+    case '2' :                          /* record with 24bit address         */
+      nBytesOnLine -= 4;
+      nAddr = GetHex(f,6);              /* get address for bytes             */
+      goto data16bit;
+    case '3' :                          /* record with 32bit address         */
+      nBytesOnLine -= 5;
+      nAddr = GetHex(f,8);              /* get address for bytes             */
+      goto data16bit;
+    /* S5/S6 records ignored; don't think they make any sense here           */
+    case '5' :
+    case '6' :
+      break;
+    case '7' :                          /* 32-bit entry point                */
+      nAddr = GetHex(f, 8);             /* get address to jump to            */
+      goto entry16bit;
+    case '8' :                          /* 24-bit entry point                */
+      nAddr = GetHex(f, 6);             /* get address to jump to            */
+      goto entry16bit;
     case '9' :
       nAddr = GetHex(f, 4);             /* get address to jump to            */
+    entry16bit:
+      /* this program only deals with 16bit data, so restrict to 0-$FFFF     */
       if ((nAddr < 0) || (nAddr >= 0x10000)) /* if illegal address           */
         { nBytes = -1; break; }         /* return with error                 */
+      /* the documentation says "if address isn't needed, use 0".
+       * bad idea IMO (they should have allowed to pass NO address instead),
+       * but, well ... 0 MIGHT be a valid start address, so we need to live
+       * with the ambiguity. */
       load = nAddr;
       done = 1;
       break;
@@ -2702,6 +3301,10 @@ while ((!done) &&
       done = 1;
       break;
     }
+
+  /* ignore checksum byte; its calculation would be:
+     add up all decoded bytes after the record type,
+     take 1's complement of lowest byte */
 
   while (((c = fgetc(f)) != EOF) &&     /* skip to newline                   */
          (c != '\r') && (c != '\n'))
@@ -2717,9 +3320,9 @@ while ((!done) &&
 fseek(f, nCurPos, SEEK_SET);
 if (nBytes >= 0)
   {
-  if (begin < *pbegin)
+  if (begin < (int)*pbegin)
     *pbegin = begin;
-  if (end > *pend)
+  if (end > (int)*pend)
     *pend = end;
   if (load >= 0)
     *pload = load;
@@ -2737,7 +3340,7 @@ return (nBytes > 0);                    /* pass back #bytes interpreted      */
 int loadfile
     (
     char *fn,
-    unsigned *pbegin, unsigned *pend, unsigned *pload, unsigned offset,
+    unsigned *pbegin, unsigned *pend, int *pload, unsigned offset,
     FILE *out
     )
 {
@@ -2747,21 +3350,25 @@ if (!f)
                                         /* if not a FLEX binary              */
 if ((!IsFlex(f, memory, pbegin, pend, pload)) &&
                                         /* and not an Intel HEX file         */
-    (!IsIntelHex(f, memory, pbegin, pend)) &&
+    (!IsIntelHex(f, memory, pbegin, pend, pload)) &&
                                         /* and not a Motorola HEX file       */
     (!IsMotorolaHex(f, memory, pbegin, pend, pload)))
-  {
-  int i, off;
+  {                                     /* load as normal binary image       */
+  unsigned int i, off;
   fseek(f,0,SEEK_END);
   off = ftell(f);
   rewind(f);
+
+  /* naive tests by J. Sigle showed that the logic was not robust enough...  */
+  if (offset + off > 0x10000)           /* restrict to 64K area              */
+    off = 0x10000 - offset;
 
   if (offset < *pbegin)                 /* set begin if not specified        */
     *pbegin = offset;
   if (*pend < offset + off - 1)         /* set end if not specified          */
     *pend = offset + off -1;
                                         /* mark area as used                 */
-  for (i = offset; i <offset + off; i++)
+  for (i = offset; i < offset + off; i++)
     {
     SET_USED(i);
     ATTRBYTE(i) |= defaultDataType;
@@ -2786,65 +3393,116 @@ return 0;
 /* processinfo : processes an information file                               */
 /*****************************************************************************/
 
-void processinfo(char *name, FILE *outfile)
+void processinfo(char *name, FILE *outfile, int *FoundVectors)
 {
 FILE *fp = NULL;
 char szBuf[256];
 int i;
 byte bDataType;
 byte endinfo = 0;
+enum
+  {
+  infoCode,                             /* [+]CODE addr[-addr]               */
+  infoData,                             /* [+]DATA addr[-addr]               */
+  infoLabel,                            /* LABEL addr name                   */
+  infoComment,                          /* COMMENT addr[-addr] comment       */
+  infoInclude,                          /* INCLUDE infofilename              */
+  infoBinary,                           /* [+]BINARY addr[-addr]             */
+  infoWord,                             /* [+]WORD addr[-addr]               */
+  infoDWord,                            /* [+]DWORD addr[-addr]              */
+  infoUnused,                           /* [+]UNUSED addr[-addr]             */
+  infoInsert,                           /* INSERT addr[-addr] text           */
+  infoSetDP,                            /* SETDP [addr[-addr]] dp            */
+  infoUnsetDP,                          /* UNSETDP [addr[-addr]]             */
+  infoLComment,                         /* LCOMMENT addr[-addr] [.]lcomment  */
+  infoRMB,                              /* [+]RMB addr[-addr]                */
+  infoUnlabel,                          /* UNLABEL addr[-addr]               */
+  infoUncomment,                        /* UNCOMMENT addr[-addr]             */
+  infoUnLComment,                       /* UNLCOMMENT addr[-addr]            */
+  infoConstant,                         /* [+]CONST addr[-addr]              */
+  infoPatch,                            /* PATCH addr [byte]*                */
+  infoPatchWord,                        /* PATCHW addr [word]*               */
+  infoBreak,                            /* [+]BREAK addr[-addr]              */
+  infoPrepend,                          /* PREPEND [addr[-addr]] line        */
+  infoHex,                              /* [+]HEX addr[-addr]                */
+  infoDec,                              /* [+]DEC addr[-addr]                */
+  infoChar,                             /* [+]CHAR addr[-addr]               */
+  infoUsedLabel,                        /* USEDLABEL addr[-addr]             */
+  infoPrepComm,                         /* PREPCOMM [addr[-addr]] comment    */
+  infoRelative,                         /* RELATIVE addr[-addr] rel          */
+  infoUnRelative,                       /* UNRELATIVE addr[-addr]            */
+  infoPrepLComment,                     /* PREPLCOMM addr[-addr] [.]lcomment */
+  infoRemap,                            /* REMAP addr[-addr] offs            */
+  infoFile,                             /* FILE filename                     */
+  infoPhase,                            /* PHASE addr[-addr] phase           */
+
+  /* RB: new vector label types */
+  infoCVector,                           /* CVEC[TOR] addr[-addr]             */
+  infoDVector,                           /* DVEC[TOR] addr[-addr]             */
+
+  infoEnd,                              /* END (processing this file)        */
+  };
 static struct                           /* structure to convert key to type  */
   {
-  char * szName;
+  const char *szName;
   int nType;
   } sKey[] =
   {
-  { "CODE",          0 },
-  { "DATA",          1 },
-  { "LABEL",         2 },
-  { "COMMENT",       3 },
-  { "COMM",          3 },
-  { "INCLUDE",       4 },
-  { "BIN",           5 },
-  { "BINARY",        5 },
-  { "WORD",          6 },
-  { "UNUSED",        7 },
-  { "INSERT",        8 },
-  { "SETDP",         9 },
-  { "LCOMMENT",     10 },
-  { "LCOMM",        10 },
-  { "RMB",          11 },
-//  { "OPTION",       -1 },
-  { "UNLABEL",      12 },
-  { "UNCOMMENT",    13 },
-  { "UNCOMM",       13 },
-  { "UNLCOMMENT",   14 },
-  { "UNLCOMM",      13 },
-  { "CONSTANT",     15 },
-  { "CONST",        15 },
-  { "PATCH",        16 },
-  { "PATCHW",       17 },
-  { "BREAK",        18 },
-  { "PREPEND",      19 },
-  { "HEXADECIMAL",  20 },
-  { "SEDECIMAL",    20 },
-  { "HEX",          20 },
-  { "DECIMAL",      21 },
-  { "DEC",          21 },
-  { "CHARACTER",    22 },
-  { "CHAR",         22 },
-  { "USED",         23 },
-  { "USEDLABEL",    23 },
-  { "PREPCOMM",     24 },
-  { "RELATIVE",     25 },
-  { "REL",          25 },
-  { "UNRELATIVE",   26 },
-  { "UNREL",        26 },
-  { "PREPLCOMMENT", 27 },
-  { "PREPLCOMM",    27 },
-  { "REMAP",        28 },
-  { "END",          29 },
-  { "FILE",         30 },
+  { "CODE",         infoCode },
+  { "DATA",         infoData },
+  { "LABEL",        infoLabel },
+  { "COMMENT",      infoComment },
+  { "COMM",         infoComment },
+  { "INCLUDE",      infoInclude },
+  { "BIN",          infoBinary },
+  { "BINARY",       infoBinary },
+  { "WORD",         infoWord },
+  { "DWORD",        infoDWord },
+  { "UNUSED",       infoUnused },
+  { "INSERT",       infoInsert },
+  { "SETDP",        infoSetDP },
+  { "LCOMMENT",     infoLComment },
+  { "LCOMM",        infoLComment },
+  { "RMB",          infoRMB },
+  { "OPTION",       -1 },
+  { "UNLABEL",      infoUnlabel },
+  { "UNCOMMENT",    infoUncomment },
+  { "UNCOMM",       infoUncomment },
+  { "UNLCOMMENT",   infoUnLComment },
+  { "UNLCOMM",      infoUnLComment },
+  { "CONSTANT",     infoConstant },
+  { "CONST",        infoConstant },
+  { "PATCH",        infoPatch },
+  { "PATCHW",       infoPatchWord },
+  { "BREAK",        infoBreak },
+  { "PREPEND",      infoPrepend },
+  { "HEXADECIMAL",  infoHex },
+  { "SEDECIMAL",    infoHex },
+  { "HEX",          infoHex },
+  { "DECIMAL",      infoDec },
+  { "DEC",          infoDec },
+  { "CHARACTER",    infoChar },
+  { "CHAR",         infoChar },
+  { "USED",         infoUsedLabel },
+  { "USEDLABEL",    infoUsedLabel },
+  { "PREPCOMM",     infoPrepComm },
+  { "RELATIVE",     infoRelative },
+  { "REL",          infoRelative },
+  { "UNRELATIVE",   infoUnRelative },
+  { "UNREL",        infoUnRelative },
+  { "PREPLCOMMENT", infoPrepLComment },
+  { "PREPLCOMM",    infoPrepLComment },
+  { "REMAP",        infoRemap },
+  { "FILE",         infoFile },
+  { "PHASE",        infoPhase },
+
+  /* RB: new vector label types */
+  { "CVECTOR",      infoCVector },
+  { "CVEC",         infoCVector },
+  { "DVECTOR",      infoDVector },
+  { "DVEC",         infoDVector },
+
+  { "END",          infoEnd },
   };
 
 strcpy(szBuf, name);
@@ -2868,12 +3526,12 @@ for (i = 0;                             /* look whether already loaded       */
 if (i >= (sizeof(loaded) / sizeof(loaded[0])))
   return;
 
-// we will otherwise never see an error-free help
-if(strcmp(name,"help")==0)
-{
+/* RB: we will otherwise never see an error-free help */
+if (!strcmp(name, "help"))
+  {
   infousage();
   exit(0);
-}
+  }
 
 loaded[i] = strdup(name);               /* copy name to current position     */
 fp = fopen(name, "r");
@@ -2928,41 +3586,60 @@ while (fgets(szBuf, sizeof(szBuf), fp))
 
   switch (nType)
     {
+    case infoCode :                     /* [+]CODE addr[-addr]               */
+    case infoData :                     /* [+]DATA addr[-addr]               */
+    case infoBinary :                   /* [+]BINARY addr[-addr]             */
+    case infoWord :                     /* [+]WORD addr[-addr]               */
+    case infoDWord :                    /* [+]DWORD addr[-addr]              */
+      /* f9dasm can't really do DWORDs (only in 6309 LDQ processing),
+         so this is treated like WORD+CONST */
+    case infoUnused :                   /* [+]UNUSED addr[-addr]             */
+    case infoRMB :                      /* [+]RMB addr[-addr]                */
+    case infoConstant :                 /* [+]CONST addr[-addr]              */
+    case infoBreak :                    /* [+]BREAK addr[-addr]              */
+    case infoHex :                      /* [+]HEX addr[-addr]                */
+    case infoDec :                      /* [+]DEC addr[-addr]                */
+    case infoChar :                     /* [+]CHAR addr[-addr]               */
+    case infoCVector:                   /* [+]CVEC[TOR] addr[-addr]          */
+    case infoDVector:                   /* [+]DVEC[TOR] addr[-addr]          */
 
-    // code/data definitions
-    case 0 :                            /* CODE                              */
-    case 1 :                            /* DATA                              */
-    case 5 :                            /* BINARY                            */
-    case 6 :                            /* WORD                              */
-    case 7 :                            /* UNUSED                            */
-    case 11 :                           /* RMB                               */
-    case 15 :                           /* CONST                             */
-    case 18 :                           /* BREAK                             */
-    case 20 :                           /* HEX                               */
-    case 21 :                           /* DEC                               */
-    case 22 :                           /* CHAR                              */
-      if (nType == 20)
-        bDataType = DATATYPE_HEX;
-      else if (nType == 21)
-        bDataType = DATATYPE_DEC;
-      else if (nType == 22)
-        bDataType = DATATYPE_CHAR;
-      else if (nType == 5)
-        bDataType = DATATYPE_BINARY;
-      else if (nType != 7)
-        bDataType = defaultDataType;
-      else
-        bDataType = 0;
-//    nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
+      /* datatype setting */
+      switch(nType)
+        {
+        case infoHex:     bDataType = DATATYPE_HEX;     break;
+        case infoDec:     bDataType = DATATYPE_DEC;     break;
+        case infoChar:    bDataType = DATATYPE_CHAR;    break;
+        case infoBinary:  bDataType = DATATYPE_BINARY;  break;
+        default:
+          if (nType != infoUnused)
+            bDataType = defaultDataType;
+          else
+            bDataType = 0;
+        }
+
       nScanned = Scan2Hex(p, &nFrom, &nTo);
+
+      /* skip if not at least "from" address found */
       if (nScanned < 1)
         break;
+
+      /* set implicit "to" address, if not specified */
       if (nScanned == 1)
-        nTo = (nType == 6) ? nFrom + 1 : nFrom;
+        nTo = (nType == infoWord) ? nFrom + 1 : nFrom;
+
+      /* skip in case of erratic ranges */
       if ((nFrom < 0) || (nTo < 0) || (nFrom > nTo) || (nTo >= 0x10000))
         break;
-      for (; nFrom <= nTo; nFrom++)
-        if (nType == 7) // unused
+
+      /* RB: signal VECTOR statement occurrence */
+      if (
+        (nType == infoCVector)||
+        (nType == infoDVector)
+      )
+        *FoundVectors = TRUE;
+
+      for (; nFrom <= nTo; nFrom++)     /* work through address range        */
+        if (nType == infoUnused)
           {
           ATTRBYTE(nFrom) &=            /* force byte to NOT USED            */
               (AREATYPE_LABEL | AREATYPE_ULABEL);
@@ -2970,41 +3647,47 @@ while (fgets(szBuf, sizeof(szBuf), fp))
           }
         else
           {
-          if (bMod)
+
+          if (bMod)                     /* if '+' modifier was found         */
             {
-            if ((nType == 5) ||
-                ((nType >= 20) && (nType <= 22))) // binary, hex, dec, char
+            if ((nType == infoBinary) ||
+                (nType == infoHex) ||
+                (nType == infoDec) ||
+                (nType == infoChar))
               ATTRBYTE(nFrom) &= ~DATATYPE_CHAR;
             }
           else
             {
-            if ((nType != 15) && (nType != 18)) // all but CONST and BREAK
+            if ((nType != infoConstant) &&
+                (nType != infoBreak))
               ATTRBYTE(nFrom) &= ~(AREATYPE_CODE | AREATYPE_DATA |
                                    AREATYPE_WORD |
                                    AREATYPE_CHAR | AREATYPE_BINARY | AREATYPE_HEX);
             }
-          if (nType == 11)              /* if RMB                            */
-            SET_USED(nFrom);            /* force byte to USED                */
 
-          if (nType == 21)  // DEC
+          if (nType == infoRMB)
+            SET_USED(nFrom);            /* force byte@address to USED        */
+
+          if (nType == infoDec)
             ATTRBYTE(nFrom) &= ~DATATYPE_HEX;
           else
-            ATTRBYTE(nFrom) |= ((nType == 0) ? (AREATYPE_CODE | bDataType) :
-                                (nType == 1) ? (AREATYPE_DATA | bDataType) :
-                                (nType == 5) ? AREATYPE_BINARY :
-                                (nType == 6) ? (AREATYPE_WORD | bDataType) :
-                                (nType == 11) ? AREATYPE_RMB :
-                                (nType == 15) ? (AREATYPE_CONST | bDataType) :
-                                (nType == 18) ? AREATYPE_ULABEL :
-                                (nType == 20) ? AREATYPE_HEX :
-                                (nType == 22) ? AREATYPE_CHAR :
+            ATTRBYTE(nFrom) |= ((nType == infoCode)     ? (AREATYPE_CODE | bDataType) :
+                                (nType == infoData)     ? (AREATYPE_DATA | bDataType) :
+                                (nType == infoBinary)   ? AREATYPE_BINARY :
+                                (nType == infoWord)     ? (AREATYPE_WORD | bDataType) :
+                                (nType == infoDWord)    ? (AREATYPE_WORD | AREATYPE_CONST | bDataType) :
+                                (nType == infoRMB)      ? AREATYPE_RMB :
+                                (nType == infoConstant) ? (AREATYPE_CONST | bDataType) :
+                                (nType == infoBreak)    ? AREATYPE_ULABEL :
+                                (nType == infoHex)      ? AREATYPE_HEX :
+                                (nType == infoChar)     ? AREATYPE_CHAR :
+                                (nType == infoDVector)  ? AREATYPE_DVEC :
+                                (nType == infoCVector)  ? AREATYPE_CVEC :
                                 0);
           }
       break;
-
-    // remove label from list
-    case 12 :                           /* UNLABEL                           */
-      nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
+    case infoUnlabel :                  /* UNLABEL addr[-addr]               */
+      nScanned = Scan2Hex(p, &nFrom, &nTo);
       if (nScanned == 1)
         nTo = nFrom;
       if ((nScanned < 1) ||
@@ -3021,10 +3704,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         ATTRBYTE(nScanned) &= ~AREATYPE_LABEL;
         }
       break;
-
-    // mark label as used
-    case 23 :                           /* USEDLABEL                         */
-//    nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
+    case infoUsedLabel :                /* USEDLABEL addr[-addr]             */
       nScanned = Scan2Hex(p, &nFrom, &nTo);
       if (nScanned == 1)
         nTo = nFrom;
@@ -3035,11 +3715,10 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       for (nScanned = nFrom; nScanned <= nTo; nScanned++)
         ATTRBYTE(nScanned) |= AREATYPE_ULABEL;
       break;
-    case 13 :                           /* UNCOMMENT                         */
-    case 14 :                           /* UNLCOMMENT                        */
+    case infoUncomment :                /* UNCOMMENT addr[-addr]             */
+    case infoUnLComment :               /* UNLCOMMENT addr[-addr]            */
       {
       char **ct;
-//    nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
       nScanned = Scan2Hex(p, &nFrom, &nTo);
       if (nScanned == 1)
         nTo = nFrom;
@@ -3047,7 +3726,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
           (nFrom < 0) || (nFrom >= 0x10000) ||
           (nTo < 0) || (nTo >= 0x10000) || (nFrom > nTo))
         break;
-      ct = (nType == 13) ? commentlines : lcomments;
+      ct = (nType == infoUncomment) ? commentlines : lcomments;
       for (nScanned = nFrom; nScanned <= nTo; nScanned++)
         {
         if (ct[nScanned])
@@ -3059,15 +3738,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       }
       break;
 
-    // comment
-    case 3 :                            /* COMMENT                           */
-      if (!emitComments)
-        break;
-      /* otherwise fall thru to... */
-
-    // label insertion
-    case 2 :                            /* LABEL                             */
-    case 8 :                            /* INSERT                            */
+    case infoLabel :                    /* LABEL addr name                   */
     DoInsert:                           /* PREPCOMM, PREPEND                 */
       {
       char *laddr = p;
@@ -3078,7 +3749,6 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         ;
       if (*p == '.')
         p++;
-//    nScanned = sscanf(laddr, "%x-%x", &nFrom, &nTo);
       nScanned = Scan2Hex(laddr, &nFrom, &nTo);
       if (nScanned < 1)
         break;
@@ -3088,7 +3758,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
            (*q) &&
            (*q != '\n') &&
            (*q != '*') &&
-           ((nType != 2) || ((*q != ' ') && (*q != '\t')));
+           ((nType != infoLabel) || ((*q != ' ') && (*q != '\t')));
            q++)
         {
         if (*q == '\\')                 /* process escape character          */
@@ -3097,13 +3767,13 @@ while (fgets(szBuf, sizeof(szBuf), fp))
 
       if (*q)
         *q = '\0';
-      if (((nType == 2) && (!*p)) ||
+      if (((nType == infoLabel) && (!*p)) ||
           (nFrom < 0) || (nFrom > 0xffff) ||
           (nTo < 0) || (nTo >= 0x10000) || (nFrom > nTo))
         break;
       for (nScanned = nFrom; nScanned <= nTo; nScanned++)
         {
-        if (nType == 2)                 /* if setting a label,               */
+        if (nType == infoLabel)         /* if setting a label,               */
           {
           if (lblnames[nScanned])       /* remove eventual predefinition     */
             free(lblnames[nScanned]);
@@ -3118,8 +3788,8 @@ while (fgets(szBuf, sizeof(szBuf), fp))
             commentlines[nScanned] = realloc(commentlines[nScanned], nLen);
             if (commentlines[nScanned])
               {
-              if ((nType == 19) ||      /* if PREPEND                        */
-                  (nType == 24))        /* or PREPCOMM                       */
+              if ((nType == infoPrepend) ||
+                  (nType == infoPrepComm))
                 {
                 int prepcomm = 0;       /* prepend comment char necessary    */
                                         /* if that was an INSERT or PREPEND  */
@@ -3134,7 +3804,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
                 r = q + strlen(p) + 1 + prepcomm;
                 if (*p)                 /* if there's a text,                */
                   {
-                  if (nType == 19)      /* if PREPEND                        */
+                  if (nType == infoPrepend)
                     r += 1;             /* add space for 0xff                */
                   }
                                         /* make space for new string         */
@@ -3143,7 +3813,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
                 q++;                    /* advance to start of buffer        */
                 if (*p)                 /* if there's a text                 */
                   {
-                  if (nType == 19)      /* if PREPEND                        */
+                  if (nType == infoPrepend)
                     *q++ = (char)0xFF;  /* prepend a "No comment char" marker*/
                   }
 
@@ -3161,9 +3831,9 @@ while (fgets(szBuf, sizeof(szBuf), fp))
                 strcat(commentlines[nScanned], "\n");
                 if (strlen(p))          /* if there's data,                  */
                   {
-                  if (nType == 3)       /* if COMMENT                        */
+                  if (nType == infoComment)
                     sprintf(commentlines[nScanned] + strlen(commentlines[nScanned]),
-                    "%c ", cCommChar);
+                            "%c ", cCommChar);
                   strcat(commentlines[nScanned], p);
                   }
                 }
@@ -3171,8 +3841,9 @@ while (fgets(szBuf, sizeof(szBuf), fp))
             }
           else                          /* if this is fresh,                 */
             {
-            if ((nType == 3) ||         /* if COMMENT or PREPCOMM            */
-                (nType == 24))          /* simply set the line as is         */
+            /* if COMMENT or PREPCOMM, simply set the line as is */
+            if ((nType == infoComment) ||
+                (nType == infoPrepComm))
               commentlines[nScanned] = strdup(p);
             else                        /* if INSERT or PREPEND              */
               {                         /* add line, but with comment delim. */
@@ -3188,9 +3859,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         }
       }
       break;
-
-    // label file including
-    case 4 :                            /* INCLUDE                           */
+    case infoInclude :                  /* INCLUDE infofilename              */
       {
       char *fname = p;
       char delim = ' ';
@@ -3203,36 +3872,61 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       if (*p)
         *p = '\0';
       if (*fname)
-        processinfo(fname, outfile);
+        processinfo(fname, outfile, FoundVectors);
       }
       break;
-    case 9 :                            /* SETDP                             */
-      if (codes != m6800_codes)         /* this is not for M6800!            */
-/*---------------------------------------------------------------------------*/
-/* currently, last one wins.                                                 */
-/* this might need some rework if I encounter a module that re-sets the      */
-/* direct page register repeatedly!                                          */
-/*---------------------------------------------------------------------------*/
-// RB: Oberheim Matrix 6 OS ftw ... They shuffle around DP
-// definitive need for dir
+    case infoSetDP :                    /* SETDP [addr[-addr]] dp            */
+      if (codes != m6800_codes &&       /* this is not for M6800!            */
+          codes != m6801_codes)
         {
         char *laddr = p;
+        int nDP;
         for (; (*p) && (*p != ' ') && (*p != '\t'); p++) ;
         if (*p)
           *p++ = '\0';
         for (; (*p == ' ') || (*p == '\t'); p++)
           ;
-        if ((sscanf(laddr, "%x", &nFrom) != 1) ||
-            ((nFrom < 0) || (nFrom > 0xff)))
+                                        /* start interpreting as range       */
+        nScanned = Scan2Hex(laddr, &nFrom, &nTo);
+        if (nScanned < 1)               /* at least dp MUST be there         */
           break;
-        dirpage = (word)nFrom;
+        else if (nScanned == 1)         /* if only start given,              */
+          nTo = 0xffff;                 /* set DP for there to end           */
+        if (sscanf(p, "%x", &nDP) >= 1) /* range must be followed by DP      */
+          {
+          if (nDP < 0 || nDP > 0xff)
+            nDP = -1;                   /* 0..FF or -1 for "off"             */
+          for (nScanned = nFrom; nScanned <= nTo; nScanned++)
+            dps[nScanned] = (short)nDP;
+          }
+        else                            /* no range, so it's global DP       */
+          {
+          if (sscanf(laddr, "%x", &nDP) != 1)
+            break;
+          if ((nDP < 0) || (nDP > 0xff))
+            nDP = -1;                   /* 0..FF or -1 for "off"             */
+          dirpage = nDP;
+          }
         }
       break;
-
-
-    // comments to the left
-    case 10 :                           /* LCOMMENT                          */
-    case 27 :                           /* PREPLCOMM                         */
+    case infoUnsetDP :                  /* UNSETDP [addr[-addr]]             */
+      nScanned = Scan2Hex(p, &nFrom, &nTo);
+      if (nScanned < 1)                 /* if global DP                      */
+        dirpage = 0;                    /* reset global DP                   */
+      else                              /* if for a range                    */
+        {
+        if (nScanned == 1)
+          nTo = nFrom;
+        if ((nScanned < 1) ||
+            (nFrom < 0) || (nFrom >= 0x10000) ||
+            (nTo < 0) || (nTo >= 0x10000) || (nFrom > nTo))
+          break;
+        for (nScanned = nFrom; nScanned <= nTo; nScanned++)
+          dps[nScanned] = 0x0101;       /* disable range DP                  */
+        }
+      break;
+    case infoLComment :                 /* LCOMMENT addr[-addr] [.]lcomment  */
+    case infoPrepLComment :             /* PREPLCOMM addr[-addr] [.]lcomment */
       {
       char *laddr = p;
       for (; (*p) && (*p != ' ') && (*p != '\t'); p++) ;
@@ -3242,7 +3936,6 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         ;
       if (*p == '.')                    /* '.' allows leading blanks         */
         p++;
-//    nScanned = sscanf(laddr, "%x-%x", &nFrom, &nTo);
       nScanned = Scan2Hex(laddr, &nFrom, &nTo);
       if ((nScanned < 1) || (!emitComments))
         break;
@@ -3271,7 +3964,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
           lcomments[nScanned] = realloc(lcomments[nScanned], nLen);
           if (lcomments[nScanned])
             {
-            if (nType == 10)            /* if LCOMMENT                       */
+            if (nType == infoLComment)  /* if LCOMMENT                       */
               {
               q = lcomments[nScanned] + strlen(lcomments[nScanned]);
               *q++ = '\n';
@@ -3304,21 +3997,13 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         }
       }
       break;
-
-
-    // seems like we can apply patches to memory from the label file
-    // either in byte or word granularity
-    //
-    // documentation surely is overrated.
-    //
-    case 16 :                           /* PATCH                             */
-    case 17 :                           /* PATCHW                            */
+    case infoPatch :                    /* PATCH addr [byte]*                */
+    case infoPatchWord :                /* PATCHW addr [word]*               */
       {
       char *laddr = p;
       for (; (*p) && (*p != ' ') && (*p != '\t'); p++) ;
       if (*p)
         *p++ = '\0';
-//      if (sscanf(laddr, "%x", &nFrom) != 1)
       if (ScanHex(laddr, &nFrom) != 1)
         break;
       do
@@ -3331,7 +4016,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
             (nFrom < 0) || (nFrom > 0xffff) ||
             (nTo < 0) || (nTo > 0xffff))
           break;
-        if (nType == 16)
+        if (nType == infoPatch)
           MEMORY(nFrom++) = (byte)(nTo & 0xff);
         else
           {
@@ -3343,16 +4028,13 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         } while (1);
       }
       break;
-
-
-    // repeating comments for ranges
-    case 24 :                           /* PREPCOMM [addr[-addr]] comment    */
-      if (!emitComments)                /* otherwise fall through to...      */
+    case infoComment :                  /* COMMENT addr[-addr] comment       */
+    case infoPrepComm :                 /* PREPCOMM [addr[-addr]] comment    */
+      if (!emitComments)
         break;
-
-    // prepend text to ranges
-    case 19 :                           /* PREPEND [addr[-addr]] line        */
-//    nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
+      /* otherwise fall through to... */
+    case infoInsert :                   /* INSERT [addr[-addr]] text         */
+    case infoPrepend :                  /* PREPEND [addr[-addr]] line        */
       nScanned = Scan2Hex(p, &nFrom, &nTo);
       if (nScanned == 1)
         nTo = nFrom;
@@ -3367,7 +4049,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
            q++)
         {
         if (*q == '\\')                 /* process escape character          */
-          strcpy(q, q+1);
+          strcpy(q, q + 1);
         }
       if (*q)
         *q = '\0';
@@ -3378,26 +4060,37 @@ while (fgets(szBuf, sizeof(szBuf), fp))
           *szPrepend = '\0';
         }
       else
-        {
-        int nLen = strlen(szPrepend) + strlen(p) + 4;
-        szPrepend = realloc(szPrepend, nLen);
-        }
+        szPrepend = realloc(szPrepend, strlen(szPrepend) + strlen(p) + 4);
       if (szPrepend)
         {
-        strcat(szPrepend, "\n");
-        if (strlen(p))
+        size_t len = 0;
+        if (nType == infoPrepComm ||    /* if prepending line                */
+            nType == infoPrepend)
           {
-          if (nType == 24)              /* if PREPCOMM                       */
-            sprintf(szPrepend + strlen(szPrepend),
-                    "%c ", cCommChar);
-          strcat(szPrepend, p);
+          char *old = strdup(szPrepend);
+          if (strlen(p) && nType == infoPrepComm)
+            len = sprintf(szPrepend, "%c ", cCommChar);
+          len += sprintf(szPrepend + len, "%s", p);
+          if (*old)
+            len += sprintf(szPrepend + len, "\n%s", old);
+          free(old);
+          }
+        else if (nType == infoComment ||/* if appending a line               */
+                 nType == infoInsert)
+          {
+          len = strlen(szPrepend);
+          if (len)
+            strcpy(szPrepend + len++, "\n");
+          if (strlen(p))
+            {
+            if (nType == infoComment)
+              len += sprintf(szPrepend + len, "%c ", cCommChar);
+            strcpy(szPrepend + len, p);
+            }
           }
         }
       break;
-
-    // REL/UNREL
-    // some hint would be nice ...
-    case 25 :                           /* RELATIVE                          */
+    case infoRelative :                 /* RELATIVE addr[-addr] rel          */
       {
       char *laddr = p;
       int nrel;
@@ -3407,7 +4100,6 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         *p++ = '\0';
       for (; (*p == ' ') || (*p == '\t'); p++)
         ;
-//    nScanned = sscanf(laddr, "%x-%x", &nFrom, &nTo);
       nScanned = Scan2Hex(laddr, &nFrom, &nTo);
       if (nScanned < 1)
         break;
@@ -3424,9 +4116,8 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         rels[nScanned] = nrel;
       }
       break;
-    case 26 :                           /* UNRELATIVE                        */
+    case infoUnRelative :               /* UNRELATIVE addr[-addr]            */
       {
-//    nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
       nScanned = Scan2Hex(p, &nFrom, &nTo);
       if (nScanned == 1)
         nTo = nFrom;
@@ -3438,9 +4129,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         rels[nScanned] = 0;
       }
       break;
-
-    // REMAP ... probably useful for banked code
-    case 28 :                           /* REMAP addr[-addr] offs            */
+    case infoRemap :                    /* REMAP addr[-addr] offs            */
       {
       char *laddr = p;
       int nremap;
@@ -3451,8 +4140,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         *p++ = '\0';
       for (; (*p == ' ') || (*p == '\t'); p++)
         ;
-      // allow remapped remaps... :-)
-//    nScanned = sscanf(laddr, "%x-%x", &nFrom, &nTo);
+      /* allow remapped remaps... :-) */
       nScanned = Scan2Hex(laddr, &nFrom, &nTo);
       if (nScanned < 1)
         break;
@@ -3475,9 +4163,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         remaps[nScanned] += nremap;
       }
       break;
-
-    // load binary file from within label file
-    case 30 :                           /* FILE                              */
+    case infoFile :                     /* FILE filename                     */
       {
       char *fname = p;
       char delim = ' ';
@@ -3497,11 +4183,57 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       loadfile(fname, &begin, &end, &load, nFrom, outfile);
       }
       break;
+    case infoPhase :                    /* PHASE addr[-addr] phase           */
+      {
+      char *laddr = p;
+      int nPhase, nRel, bSigned;
+
+      for (; (*p) && (*p != ' ') && (*p != '\t'); p++) ;
+      if (*p)
+        *p++ = '\0';
+      for (; (*p == ' ') || (*p == '\t'); p++)
+        ;
+      nScanned = Scan2Hex(laddr, &nFrom, &nTo);
+      if (nScanned < 1)
+        break;
+      else if (nScanned == 1)
+        nTo = nFrom;
+      bSigned = (*p == '+' || *p == '-');
+      nScanned = sscanf(p, "%x", &nPhase);
+      if (nScanned < 1)
+        break;
+      if (bSigned)
+        {
+        /* allow relative phases - no check for overlapping areas. GIGO */
+        int i;
+        nRel = nPhase;
+        for (i = numphases - 1; i >= 0; i--)
+          if (nFrom >= phases[i].from && nFrom <= phases[i].to && !phases[i].rel)
+            {
+            nPhase = i;
+            break;
+            }
+        }
+      else
+        nRel = 0;
+      if ((nFrom < 0) || (nFrom >= 0x10000) ||
+          (nTo < 0) || (nTo >= 0x10000) || (nFrom > nTo) ||
+          (nPhase < 0) || (nPhase >= 0x10000))
+        break;
+      /* NB: if over/underflow happens in the phased area, well, too bad...  */
+      if (numphases < MAXPHASES)
+        {
+        phases[numphases].from = nFrom;
+        phases[numphases].to = nTo;
+        phases[numphases].phase = nPhase;
+        phases[numphases].rel = nRel;
+        numphases++;
+        }
+      }
+      break;
     }
 
-  // useful for keeping experimental labeling out
-  // label parser stops also without
-  if (nType == 29)                      /* if END directive found            */
+  if (nType == infoEnd)                 /* if END directive found            */
     break;                              /* stop processing                   */
   }
 
@@ -3515,11 +4247,13 @@ fclose(fp);
 int main(int argc, char *argv[])
 {
 unsigned pc, add;
-int i, n, nComment;
+int i, n, nComment, isautolabel, curdp, curphase = -1;
+int lastwasdata = FALSE;  /* RB: get a divider between data and code */
+int fvec = FALSE;         /* RB: found vector declaration in label file */
 char buf[256];
 FILE *out = stdout;
 
-printf("f9dasm: M6800/M6809/H6309 Binary/OS9/FLEX9 Disassembler V" VERSION "\n");
+printf("f9dasm: M6800/1/2/3/8/9 / H6309 Binary/OS9/FLEX9 Disassembler V" VERSION "\n");
 
 for (i = 1, n = 0; i < argc; ++i)
   {
@@ -3539,27 +4273,30 @@ for (i = 1, n = 0; i < argc; ++i)
   }
 
 memory = (byte *)malloc(0x10000);
-label = (byte *)malloc(0x10000);
+label = (int *)malloc(0x10000 * sizeof(int));
 used = (byte *)malloc(0x10000 / 8);
 lblnames = (char **)malloc(0x10000 * sizeof(char *));
 commentlines = (char **)malloc(0x10000 * sizeof(char *));
 lcomments = (char **)malloc(0x10000 * sizeof(char *));
 rels = (unsigned short *)malloc(0x10000 * sizeof(unsigned short));
+dps = (short *)malloc(0x10000 * sizeof(short));
+phases = (phasedef *)malloc(MAXPHASES * sizeof(phasedef));
 remaps = (int *)malloc(0x10000 * sizeof(int));
 if ((!memory) || (!label) || (!used) ||
     (!lblnames) || (!commentlines) || (!lcomments) ||
-    (!rels) || (!remaps))
+    (!rels) || (!phases) || (!dps) || (!remaps))
   {
   printf("no mem buffer\n");
   goto exit;
   }
 memset(memory, 0x01, 0x10000);
-memset(label, 0x00, 0x10000);
+memset(label, 0x00, 0x10000 * sizeof(int));
 memset(used, 0x00, 0x10000 / 8);
 memset(lblnames, 0x00, 0x10000 * sizeof(char *));
 memset(commentlines, 0x00, 0x10000 * sizeof(char *));
 memset(lcomments, 0x00, 0x10000 * sizeof(char *));
 memset(rels, 0x00, 0x10000 * sizeof(unsigned short));
+memset(dps, 0x01, 0x10000 * sizeof(short));
 memset(remaps, 0x00, 0x10000 * sizeof(int));
 
 if (outname)
@@ -3571,12 +4308,12 @@ if (outname)
     return 1;
     }
   fprintf(out,
-          "%c f9dasm: M6800/M6809/H6309 Binary/OS9/FLEX9 Disassembler V" VERSION "\n",
+          "%c f9dasm: M6800/1/2/3/8/9 / H6309 Binary/OS9/FLEX9 Disassembler V" VERSION "\n",
           cCommChar);
   }
 
 if (infoname)                           /* first get options from info file  */
-  optionsinfo(infoname);                /* (eventually needed before load)   */
+  optionsinfo(infoname);                /* (may be needed before load)       */
 
 for (i = 0;                             /* remove loaded information         */
      (i < (sizeof(loaded) / sizeof(loaded[0]))) &&
@@ -3597,11 +4334,138 @@ if (fname && loadfile(fname, &begin, &end, &load, offset, out))
   return 1;
   }
 
-if (infoname)                           /* now get all other settings        */
-  processinfo(infoname, out);           /* from info file                    */
+/*****************************/
+/* RB: insert system vectors */
+/*****************************/
 
-if (load >= 0)
+
+pc=0xfff0;                              /* base vector address               */
+
+/* 6809 has 0xfff0/1 reserved
+ * comment out #if section for proper databook behavior */
+if (codes==m6809_codes)
+  {
+#if 0
+  /* precaution fop case of funky HEX/S files
+   * blank memory is filled with $010101... */
+  if( ARGWORD(pc)!=0x0101 )
+    {
+    ATTRBYTE(pc)  |=AREATYPE_WORD;
+    ATTRBYTE(pc+1)|=AREATYPE_WORD;
+    lblnames[pc] = strdup("svec_RESERVED");
+    }
+#endif
+  pc += 2;
+  }
+
+/* 6800/2/8 have only upper 4 */
+else if (codes==m6800_codes)
+  pc+=8;
+
+/*
+ * RB: is this true?
+ * Can we safely assume that the load address is a valid jump entry?
+ *
+ * HS: we have no way of knowing, but it would be a weird idea to explicitly
+ * specify an entry point address that isn't. GIGO.
+ *
+ * RB: multiple ROMs (or better: ROM banks at the same logical address) disassembled individually might be a counterexample,
+ * there, "spillover" from other banks might occur -- between banked and static code even within an instruction.
+ * quite a special occurrence, agreed, but I added a "noLoadLabel" option (default: FALSE) for such cases
+ *
+ * HS: I've been thinking... there's another reason where it's good to have
+ * "noLoadLabel". Motorola S-Files always have an entry point address;
+ * default is 0 (which is ambiguous, since 0 might be the start address as well).
+ *
+ */
+if ( (load >= 0) && (noLoadLabel == FALSE) )
   AddLabel(_jmp, (word)load);
+
+if (infoname)                           /* now get all other settings        */
+  processinfo(infoname, out, &fvec);    /* from info file                    */
+#if 0
+/* set label names and attributes */
+for(; pc<=0xfffe; pc+=2)
+{
+  /* precaution for case of funky HEX/S files
+   * blank memory is filled with $010101... */
+  if( ARGWORD(pc)!= 0x0101 &&
+     !IS_CONST(pc) && /* only if not defined as constant!  */
+     !IS_LABEL(pc))   /* only if not defined in info file! */
+  {
+    /* vectors are words and data */
+    ATTRBYTE(pc)  |=AREATYPE_WORD|AREATYPE_LABEL;
+    ATTRBYTE(pc+1)|=AREATYPE_WORD;
+
+    /* add target address as type jump as we don't know
+     * if, where, and when we'll be hitting RTx */
+    vaddr=ARGWORD(pc);
+
+    /* add handler label */
+    ATTRBYTE(vaddr)|=AREATYPE_CODE|AREATYPE_CLABEL|AREATYPE_LABEL;
+
+    /* enter system vector names and according handlers */
+    lblnames[pc]=malloc(16);
+    lblnames[vaddr]=malloc(16);
+
+
+    if(codes==m6801_codes)
+    {
+      sprintf(lblnames[pc],    "svec_%s", vec_6801[(pc>>1)&7]);
+      sprintf(lblnames[vaddr], "hdlr_%s", vec_6801[(pc>>1)&7]);
+    }
+    else
+    {
+      printf("about to screw up the labels at %04x\n", pc);
+      sprintf(lblnames[pc],    "svec_%s", vec_6809[(pc>>1)&7]);
+      sprintf(lblnames[vaddr], "hdlr_%s", vec_6809[(pc>>1)&7]);
+    }
+  }
+}
+#endif
+/* RB: any vector fields declared? */
+if(fvec==TRUE)
+{
+  for(pc=0; pc<=0xffff; pc++)
+  {
+
+    /* vectors found? */
+    if(IS_VEC(pc))
+    {
+      /* vectors are words and data */
+      /* no label here, that needs to come from a specific LABEL statement */
+      ATTRBYTE(pc)  |=AREATYPE_WORD;
+      ATTRBYTE(pc+1)|=AREATYPE_WORD;
+
+      /* get target */
+      vaddr=ARGWORD(pc);
+
+      /* target label not defined yet? */
+      if(!IS_LABEL(vaddr))
+      {
+        lblnames[vaddr]=malloc(20*sizeof(char));
+
+        ATTRBYTE(vaddr) |= AREATYPE_LABEL;
+
+        /* code? set flag and jump mark */
+        if(IS_CVEC(pc))
+        {
+          ATTRBYTE(vaddr) |= AREATYPE_CLABEL | AREATYPE_CODE;
+          sprintf(lblnames[vaddr],"M%04X_via_cvec_%04x",vaddr,pc);
+        }
+
+        /* data? mark area as hex. */
+        else
+        {
+          ATTRBYTE(vaddr) |= AREATYPE_HEX;
+          sprintf(lblnames[vaddr],"M%04X_via_dvec_%04x",vaddr,pc);
+        }
+    }
+
+    pc++;
+    }
+  }
+}
 
 begin &= 0xFFFF;
 end &= 0xFFFF;
@@ -3631,7 +4495,6 @@ do                                      /* (necessary for backward ref's)    */
                                         /* resolve all XXXXXXX+/-nnn labels  */
 for (pc = 0x0000; pc <= 0xFFFF; pc++)
   {
-/*  if ((!IS_USED(pc)) && (IS_LABEL(pc))) */
   if (IS_ULABEL(pc))
     {
     char *p = label_string((word)pc, 1, (word)pc);
@@ -3696,7 +4559,11 @@ for (pc = 0x0000; pc <= 0xFFFF; pc++)   /* inside the used area              */
           fprintf(out, "%s\n", commentlines[pc]);
           }
         }
+#if RB_VARIANT
       fprintf(out, "%-24s\tEQU\t$%04X", p, pc);
+#else
+      fprintf(out, "%-7s EQU     $%04X", p, pc);
+#endif
       if (emitComments && lcomments[pc])
         fprintf(out, "%21c %s", cCommChar, lcomments[pc]);
       fprintf(out, "\n");
@@ -3706,9 +4573,9 @@ for (pc = 0x0000; pc <= 0xFFFF; pc++)   /* inside the used area              */
 
 fprintf(out,
         "\n"
-        "%c**************************************************\n"
-        "%c* Program Code / Data Areas                      *\n"
-        "%c**************************************************\n"
+        "%c****************************************************\n"
+        "%c* Program Code / Data Areas                        *\n"
+        "%c****************************************************\n"
         "\n", cCommChar, cCommChar, cCommChar);
 
 #if 0
@@ -3716,8 +4583,14 @@ if (codes == m6800_codes)
   fprintf(out, "        %-7s %s\n\n", "OPT", "M68");
 #endif
 
-if ((dirpage >= 0) && (codes != m6800_codes))
-  fprintf(out, "        %-7s $%02X\n\n", "SETDP", dirpage);
+curdp = dirpage;                        /* start with global direct page     */
+if ((curdp != 0) && (codes != m6800_codes) && (codes != m6801_codes))
+  {
+  if (curdp > 0)
+    fprintf(out, "        %-7s $%02X\n\n", "SETDP", curdp);
+  else
+    fprintf(out, "        %-7s\n\n", "SETDP");
+  }
 
 for (pc = 0x0000; pc <= 0xFFFF; pc++)
   if (IS_USED(pc))
@@ -3725,15 +4598,54 @@ for (pc = 0x0000; pc <= 0xFFFF; pc++)
 if (pc > 0xffff)
   goto exit;
 fprintf(out,"        %-7s $%04X\n\n", "ORG", pc);
-
-lastwasdata=0;
 do
   {
-  trenner=0;
+  char *slabel;
+  int llen = 0;
+  optdelimbar = FALSE;
 
-  // RB: this is #define'd now
-  // very kludgy solution for now, clean up later ... compiler should optimize that mess away anyway.
-/*
+  if (IS_LABEL(pc))
+    {
+    slabel = label_string((word)pc, 1, (word)pc);
+    isautolabel = !label_at((word)pc);
+
+#if RB_VARIANT
+    /* RB:  make a stronger separation between data and code */
+    if (lastwasdata && !(IS_CONST(pc) || IS_DATA(pc)) )
+      fprintf(out, "%c------------------------------------------------------------------------\n",cCommChar);
+    if (!isautolabel)
+      fprintf(out, "\n");
+#endif
+
+    lastwasdata = FALSE;
+    }
+
+  if (codes != m6800_codes &&           /* deal with SETDP ranges            */
+      codes != m6801_codes)
+    {
+    int newdp = GetDirPage(pc);
+    if (newdp != curdp)
+      {
+      curdp = newdp;
+      if (curdp >= 0)                   /* enable direct addressing          */
+        fprintf(out, "        %-7s $%02X\n\n", "SETDP", curdp);
+      else                              /* disable direct addressing         */
+        fprintf(out, "        %-7s\n\n", "SETDP");
+      }
+    }
+
+  {                                     /* deal with phases                  */
+  int newphase = GetPhaseDef((word)pc);
+  if (newphase != curphase)
+    {
+    curphase = newphase;
+    if (curphase >= 0)
+        fprintf(out, "        %-7s $%02X\n\n", "PHASE", phases[curphase].phase);
+      else                              /* disable direct addressing         */
+        fprintf(out, "        %-7s\n\n", "DEPHASE");
+    }
+  }
+
   if (commentlines[pc])
     {
     if ((byte)commentlines[pc][0] == (byte)0xff)
@@ -3745,106 +4657,106 @@ do
       fprintf(out, "%s\n", commentlines[pc]);
       }
     }
-*/
 
   if (IS_LABEL(pc))                     /* if any label here                 */
     {
-    char *p = label_string((word)pc, 1, (word)pc);
-    if ((strchr(p, '+')) ||
-        (strchr(p, '-')))
-      p = "";
-
-    // RB:  make a stronger separation between data and code
-    if( (lastwasdata==1) && !((IS_CONST(pc) || IS_DATA(pc))) )
-      fprintf(out, "%c------------------------------------------------------------------------\n",cCommChar);
-    lastwasdata=0;
-
-    // RB:  crude way of checking whether it's an autogenerated label
-		//      user-defined ones have a meaning, therefore we insert an extra newline before and after
-		if( (strlen(p)==5) &&( (p[0]=='M')||(p[0]=='Z') ) )
-    {
-      COMMLINE;
-			fprintf(out, "%s:\t", p);           // autogenerated
-    }
- 		else
-    {
-			fprintf(out, "\n");
-      COMMLINE;
-      fprintf(out, "%s:\n        ",p);  // user-defined
-    }
+    if ((strchr(slabel, '+')) ||
+        (strchr(slabel, '-')))
+      slabel = "";
+#if RB_VARIANT
+    fprintf(out,
+            (*slabel) ?
+                 (isautolabel) ?
+                     "%s:\t" :
+                     "%s:\n        " :
+                 "%-7s ",
+            slabel);
+#else
+    llen = fprintf(out, "%s", slabel);
+    if (cLblDelim != ' ')
+      llen += fprintf(out, "%c", cLblDelim);
+    llen += fprintf(out, " ");
+    if (llen < 8)
+      llen += fprintf(out, "%-*s", 8 - llen, "");
+#endif
     }
   else
-  {
-    COMMLINE;
-    fprintf(out, "        ");
-  }
+    llen = fprintf(out, "%-*s ", 7, "");
 
   if (IS_CONST(pc) || IS_DATA(pc))
     {
     add = ShowData(out, pc, (nComment || lcomments[pc]));
-    lastwasdata=1;
+    lastwasdata = TRUE;
     }
   else
     {
     add = Dasm(buf, pc);
+
     if (nComment || lcomments[pc])
-      fprintf(out,"%-32s",buf);
+      llen += fprintf(out,"%-32s",buf);
     else
-      fprintf(out,"%s",buf);
+      llen += fprintf(out,"%s",buf);
     }
 
   if (emitComments && (nComment || lcomments[pc]))
-    fprintf(out, " %c", cCommChar);
+    llen += fprintf(out, " %c", cCommChar);
   if (showaddr)
-    fprintf(out,"%04X: ", pc);
+    llen += fprintf(out,"%04X: ", pc);
   if ((showhex || showasc) && !IS_RMB(pc))
     {
     if (showhex)
       {
       for (i = 0; i < (int)add; i++)
-        fprintf(out,"%02X ", memory[(pc + i)&0xFFFF]);
+        llen += fprintf(out,"%02X ", memory[(pc + i)&0xFFFF]);
       if (showasc || lcomments[pc])
         for (; i < 5; i++)
-          fprintf(out,"   ");
+          llen += fprintf(out,"   ");
       }
     if (showasc)
       {
-      fprintf(out, "'");
+      llen += fprintf(out, "'");
       for (i = 0; i < (int)add; i++)
         {
         byte b = memory[(pc + i) & 0xFFFF];
-        fprintf(out, "%c", ((b >= 0x20) && (b <= 0x7e)) ? b : '.');
+        llen += fprintf(out, "%c", ((b >= 0x20) && (b <= 0x7e)) ? b : '.');
         }
-      fprintf(out, "'");
+      llen += fprintf(out, "'");
       if (emitComments && lcomments[pc])
         {
         for (; i < 5; i++)
-          fprintf(out, " ");
-        fprintf(out, " ");
+          llen += fprintf(out, " ");
+        llen += fprintf(out, " ");
         }
       }
     }
   if (emitComments && lcomments[pc])
     {
     if (!nComment)
-      fprintf(out, " ");
-    fprintf(out,"%s", lcomments[pc]);
+      llen += fprintf(out, " ");
+    llen += fprintf(out,"%s", lcomments[pc]);
     }
 
   pc += add;
   fprintf(out, "\n");
+  llen = 0;
 
   while ((pc <= 0xffff) &&              /* skip unused bytes                 */
          (!IS_USED(pc)))
     pc++;
+
+  if (curphase >= 0 &&                  /* phase definition change?          */
+      curphase != GetPhaseDef((word)pc))
+    fprintf(out, "\n        %-*s\n\n", 7, "DEPHASE");
+
   if ((pc < 0x10000) &&                 /* only if still in range,           */
       (!IS_USED(pc - 1)))               /* if we DID skip something set ORG  */
-    fprintf(out, "\n        %-7s $%04X \n\n", "ORG", pc);
+    fprintf(out, "\n        %-*s $%04X \n\n", 7, "ORG", pc);
 
-  // RB: divider bar after jumps and jumpalikes
-  if(trenner==1)
-    fprintf(out, "%c------------------------------------------------------------------------\n",cCommChar);
-
+#if RB_VARIANT
+  /* RB: divider bar after jumps and jumpalikes */
+  if (optdelimbar)
+    fprintf(out, "%c------------------------------------------------------------------------\n", cCommChar);
+#endif
   } while (pc <= 0xffff);
 
 fprintf(out, "\n");
@@ -3872,6 +4784,10 @@ if (lcomments)
   free(lcomments);
 if (rels)
   free(rels);
+if (phases)
+  free(phases);
+if (dps)
+  free(dps);
 if (remaps)
   free(remaps);
 if (szPrepend)

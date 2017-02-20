@@ -63,49 +63,55 @@ enum addr_mode
    _dom,    /* direct bit manipulation */
    };
 
- enum opcodes
-   {
-   _ill=0,
-   _aba,  _abx,  _adca, _adcb, _adda, _addb, _addd, _anda, _andb,
-   _andcc,_asla, _aslb, _asl,  _asra, _asrb, _asr,  _bcc,  _lbcc,
-   _bcs,  _lbcs, _beq,  _lbeq, _bge,  _lbge, _bgt,  _lbgt, _bhi,
-   _lbhi, _bita, _bitb, _ble,  _lble, _bls,  _lbls, _blt,  _lblt,
-   _bmi,  _lbmi, _bne,  _lbne, _bpl,  _lbpl, _bra,  _lbra, _brn,
-   _lbrn, _bsr,  _lbsr, _bvc,  _lbvc, _bvs,  _lbvs,
-   _cba,  _cli,  _clra, _clrb, _clr,  _clc,  _clv,
-   _cmpa, _cmpb, _cmpd, _cmps, _cmpu, _cmpx, _cmpy, _coma,
-   _comb, _com,  _cwai, _daa,  _deca, _decb, _dec,  _des,  _dex,
-   _eora, _eorb,
-   _exg,  _inca, _incb, _inc,  _ins,  _inx,
-   _jmp,  _jsr,  _lda,  _ldb,  _ldd,
-   _lds,  _ldu,  _ldx,  _ldy,  _leas, _leau, _leax, _leay, _lsra,
-   _lsrb, _lsr,  _mul,  _nega, _negb, _neg,  _nop,  _ora,  _orb,
-   _orcc, _psha, _pshb, _pshs, _pshu,
-   _pula, _pulb, _puls, _pulu, _rola, _rolb, _rol,  _rora,
-   _rorb, _ror,  _rti,  _rts,  _sba,  _sbca, _sbcb,
-   _sec,  _sei,  _sev,  _sex,  _sez,  _sta,
-   _stb,  _std,  _sts,  _stu,  _stx,  _sty,  _suba, _subb, _subd,
-   _swi,  _swi2, _swi3, _sync, _tab,  _tap,  _tba,
-   _tfr,  _tpa,  _tsta, _tstb,
-   _tst,  _tsx,  _txs,
-   _wai,  _reset,
-   /* 6800 extra opcodes */
-   _cpx,
-   /* 6309 extra opcodes */
-   _aim,  _eim,  _oim,  _tim,  _band, _biand,_bor,  _bior, _beor,
-   _bieor,_ldbt, _stbt, _tfm,  _adcd, _adcr, _adde, _addf, _addw,
-   _addr, _andd, _andr, _asld, _asrd, _bitd, _bitmd,_clrd, _clre,
-   _clrf, _clrw, _cmpe, _cmpf, _cmpw, _cmpr, _comd, _come, _comf,
-   _comw, _decd, _dece, _decf, _decw, _divd, _divq, _eord, _eorr,
-   _incd, _ince, _incf, _incw, _lde,  _ldf,  _ldq,  _ldw,  _ldmd,
-   _lsrd, _lsrw, _muld, _negd, _ord,  _orr,  _pshsw,_pshuw,_pulsw,
-   _puluw,_rold, _rolw, _rord, _rorw, _sbcd, _sbcr, _sexw, _ste,
-   _stf,  _stq,  _stw,  _sube, _subf, _subw, _subr, _tstd, _tste,
-   _tstf, _tstw,
-   /* 68hc11 extra opcodes */
-   _pulx, _pshx, _bset, _bclr, _brset, _brclr,
 
-   };
+   enum opcodes
+     {
+     _ill=0,
+     _aba,  _abx,  _adca, _adcb, _adda, _addb, _addd, _anda, _andb,
+     _andcc,_asla, _aslb, _asl,  _asra, _asrb, _asr,  _bcc,  _lbcc,
+     _bcs,  _lbcs, _beq,  _lbeq, _bge,  _lbge, _bgt,  _lbgt, _bhi,
+     _lbhi, _bita, _bitb, _ble,  _lble, _bls,  _lbls, _blt,  _lblt,
+     _bmi,  _lbmi, _bne,  _lbne, _bpl,  _lbpl, _bra,  _lbra, _brn,
+     _lbrn, _bsr,  _lbsr, _bvc,  _lbvc, _bvs,  _lbvs,
+     _cba,  _cli,  _clra, _clrb, _clr,  _clc,  _clv,
+     _cmpa, _cmpb, _cmpd, _cmps, _cmpu, _cmpx, _cmpy, _coma,
+     _comb, _com,  _cwai, _daa,  _deca, _decb, _dec,  _des,  _dex,
+     _eora, _eorb,
+     _exg,  _inca, _incb, _inc,  _ins,  _inx,
+     _jmp,  _jsr,  _lda,  _ldb,  _ldd,
+     _lds,  _ldu,  _ldx,  _ldy,  _leas, _leau, _leax, _leay, _lsra,
+     _lsrb, _lsr,  _mul,  _nega, _negb, _neg,  _nop,  _ora,  _orb,
+     _orcc, _psha, _pshb, _pshs, _pshu,
+     _pula, _pulb, _puls, _pulu, _rola, _rolb, _rol,  _rora,
+     _rorb, _ror,  _rti,  _rts,  _sba,  _sbca, _sbcb,
+     _sec,  _sei,  _sev,  _sex,  _sez,  _sta,
+     _stb,  _std,  _sts,  _stu,  _stx,  _sty,  _suba, _subb, _subd,
+     _swi,  _swi2, _swi3, _sync, _tab,  _tap,  _tba,
+     _tfr,  _tpa,  _tsta, _tstb,
+     _tst,  _tsx,  _txs,
+     _wai,  _reset,
+     /* 6800 extra opcodes */
+     _cpx,
+     /* 6801/6803 extra opcodes */
+     _pulx, _pshx,
+     /* 6301/03 extra opcodes */
+     _slp, _xgdx,
+     /* 630x extra opcodes */
+     _aim,  _eim,  _oim,  _tim,
+     /* 6309 extra opcodes */
+     _band, _biand,_bor,  _bior, _beor,
+     _bieor,_ldbt, _stbt, _tfm,  _adcd, _adcr, _adde, _addf, _addw,
+     _addr, _andd, _andr, _asld, _asrd, _bitd, _bitmd,_clrd, _clre,
+     _clrf, _clrw, _cmpe, _cmpf, _cmpw, _cmpr, _comd, _come, _comf,
+     _comw, _decd, _dece, _decf, _decw, _divd, _divq, _eord, _eorr,
+     _incd, _ince, _incf, _incw, _lde,  _ldf,  _ldq,  _ldw,  _ldmd,
+     _lsrd, _lsrw, _muld, _negd, _ord,  _orr,  _pshsw,_pshuw,_pulsw,
+     _puluw,_rold, _rolw, _rord, _rorw, _sbcd, _sbcr, _sexw, _ste,
+     _stf,  _stq,  _stw,  _sube, _subf, _subw, _subr, _tstd, _tste,
+     _tstf, _tstw,
+     /* 68hc11 extra opcodes */
+     _bset, _bclr, _brset, _brclr,
 
+     };
 
 #endif
