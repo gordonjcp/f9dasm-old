@@ -30,13 +30,13 @@
 //
 //  (1) auto-parse system vectors if not in OS9 mode
 //  (2) run along system vectors to get improved code/data view
-// 
+//
 // todo label parser/printer:
-// 
+//
 //  (1) make label parser accept ranged SETDP directives
 //  (2) support for banked code, accept page ranges (related to (1))
 //  (3) introduce directive that marks #$xxxx constant as numerical constant, not memory address
- 
+
 #define VERSION "1.61-RB"
 
 /* NOTE! os9 call table is not tested. */
@@ -45,6 +45,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
+#include "opcode.h"
+#include "mc6309.h"
+#include "mc6809.h"
 
 // RB: I know this is ugly ...
 #define COMMLINE                                                \
@@ -135,7 +139,7 @@ typedef unsigned short word;
 /*****************************************************************************/
 
 // RB: get a divider after BRA/JMP/SWIx/RTS/RTI/PULx PC
-int trenner=0;  
+int trenner=0;
 
 // RB: get a divider between data and code
 int lastwasdata=0;
@@ -170,7 +174,7 @@ char *sLoadType = "";
 
 enum                                    /* available options                 */
   {
-  OPTION_BEGIN,                         
+  OPTION_BEGIN,
   OPTION_END,
   OPTION_OFFSET,
   OPTION_OUT,
@@ -228,327 +232,6 @@ static struct
   { "6800",      OPTION_6800 },
   { "help",      OPTION_HELP },
   { NULL, 0 }
-  };
-
-enum addr_mode
-  {
-  _nom,     /* no mode                    */
-  _imp,     /* inherent/implied           */
-  _imb,     /* immediate byte             */
-  _imw,     /* immediate word             */
-  _dir,     /* direct                     */
-  _ext,     /* extended                   */
-  _ix8,     /* indexed for 6800           */
-  _ind,     /* indexed                    */
-  _reb,     /* relative byte              */
-  _rew,     /* relative word              */
-  _r1 ,     /* tfr/exg mode               */
-  _r2 ,     /* pul/psh system             */
-  _r3 ,     /* pul/psh user               */
-  _bd ,     /* Bit Manipulation direct    */
-  _bi ,     /* Bit Manipulation index     */
-  _be ,     /* Bit Manipulation extended  */
-  _bt ,     /* Bit Transfers direct       */
-  _t1 ,     /* Block Transfer r0+,r1+     */
-  _t2 ,     /* Block Transfer r0-,r1-     */
-  _t3 ,     /* Block Transfer r0+,r1      */
-  _t4 ,     /* Block Transfer r0,r1+      */
-  _iml,     /* immediate 32-bit           */
-  };
-
-enum opcodes
-  {
-  _ill=0,
-  _aba,  _abx,  _adca, _adcb, _adda, _addb, _addd, _anda, _andb,
-  _andcc,_asla, _aslb, _asl,  _asra, _asrb, _asr,  _bcc,  _lbcc,
-  _bcs,  _lbcs, _beq,  _lbeq, _bge,  _lbge, _bgt,  _lbgt, _bhi,
-  _lbhi, _bita, _bitb, _ble,  _lble, _bls,  _lbls, _blt,  _lblt,
-  _bmi,  _lbmi, _bne,  _lbne, _bpl,  _lbpl, _bra,  _lbra, _brn,
-  _lbrn, _bsr,  _lbsr, _bvc,  _lbvc, _bvs,  _lbvs, 
-  _cba,  _cli,  _clra, _clrb, _clr,  _clc,  _clv,  
-  _cmpa, _cmpb, _cmpd, _cmps, _cmpu, _cmpx, _cmpy, _coma,
-  _comb, _com,  _cwai, _daa,  _deca, _decb, _dec,  _des,  _dex, 
-  _eora, _eorb,
-  _exg,  _inca, _incb, _inc,  _ins,  _inx,  
-  _jmp,  _jsr,  _lda,  _ldb,  _ldd,
-  _lds,  _ldu,  _ldx,  _ldy,  _leas, _leau, _leax, _leay, _lsra,
-  _lsrb, _lsr,  _mul,  _nega, _negb, _neg,  _nop,  _ora,  _orb,
-  _orcc, _psha, _pshb, _pshs, _pshu,
-  _pula, _pulb, _puls, _pulu, _rola, _rolb, _rol,  _rora,
-  _rorb, _ror,  _rti,  _rts,  _sba,  _sbca, _sbcb,
-  _sec,  _sei,  _sev,  _sex,  _sez,  _sta,
-  _stb,  _std,  _sts,  _stu,  _stx,  _sty,  _suba, _subb, _subd,
-  _swi,  _swi2, _swi3, _sync, _tab,  _tap,  _tba,  
-  _tfr,  _tpa,  _tsta, _tstb,
-  _tst,  _tsx,  _txs,  
-  _wai,  _reset,
-  /* 6800 extra opcodes */
-  _cpx,   
-  /* 6309 extra opcodes */
-  _aim,  _eim,  _oim,  _tim,  _band, _biand,_bor,  _bior, _beor,
-  _bieor,_ldbt, _stbt, _tfm,  _adcd, _adcr, _adde, _addf, _addw,
-  _addr, _andd, _andr, _asld, _asrd, _bitd, _bitmd,_clrd, _clre,
-  _clrf, _clrw, _cmpe, _cmpf, _cmpw, _cmpr, _comd, _come, _comf,
-  _comw, _decd, _dece, _decf, _decw, _divd, _divq, _eord, _eorr,
-  _incd, _ince, _incf, _incw, _lde,  _ldf,  _ldq,  _ldw,  _ldmd,
-  _lsrd, _lsrw, _muld, _negd, _ord,  _orr,  _pshsw,_pshuw,_pulsw,
-  _puluw,_rold, _rolw, _rord, _rorw, _sbcd, _sbcr, _sexw, _ste,
-  _stf,  _stq,  _stw,  _sube, _subf, _subw, _subr, _tstd, _tste,
-  _tstf, _tstw,
-  };
-
-struct
-  {
-  char *mne;
-  byte bCodeJump;
-  } mnemo[] =
-  {
-    { "???",   0 },                     /* _ill                              */
-    { "ABA",   0 },                     /* _aba                              */
-    { "ABX",   0 },                     /* _abx                              */
-    { "ADCA",  0 },                     /* _adca                             */
-    { "ADCB",  0 },                     /* _adcb                             */
-    { "ADDA",  0 },                     /* _adda                             */
-    { "ADDB",  0 },                     /* _addb                             */
-    { "ADDD",  0 },                     /* _addd                             */
-    { "ANDA",  0 },                     /* _anda                             */
-    { "ANDB",  0 },                     /* _andb                             */
-    { "ANDCC", 0 },                     /* _andcc                            */
-    { "ASLA",  0 },                     /* _asla                             */
-    { "ASLB",  0 },                     /* _aslb                             */
-    { "ASL",   0 },                     /* _asl                              */
-    { "ASRA",  0 },                     /* _asra                             */
-    { "ASRB",  0 },                     /* _asrb                             */
-    { "ASR",   0 },                     /* _asr                              */
-    { "BCC",   1 },                     /* _bcc                              */
-    { "LBCC",  1 },                     /* _lbcc                             */
-    { "BCS",   1 },                     /* _bcs                              */
-    { "LBCS",  1 },                     /* _lbcs                             */
-    { "BEQ",   1 },                     /* _beq                              */
-    { "LBEQ",  1 },                     /* _lbeq                             */
-    { "BGE",   1 },                     /* _bge                              */
-    { "LBGE",  1 },                     /* _lbge                             */
-    { "BGT",   1 },                     /* _bgt                              */
-    { "LBGT",  1 },                     /* _lbgt                             */
-    { "BHI",   1 },                     /* _bhi                              */
-    { "LBHI",  1 },                     /* _lbhi                             */
-    { "BITA",  0 },                     /* _bita                             */
-    { "BITB",  0 },                     /* _bitb                             */
-    { "BLE",   1 },                     /* _ble                              */
-    { "LBLE",  1 },                     /* _lble                             */
-    { "BLS",   1 },                     /* _bls                              */
-    { "LBLS",  1 },                     /* _lbls                             */
-    { "BLT",   1 },                     /* _blt                              */
-    { "LBLT",  1 },                     /* _lblt                             */
-    { "BMI",   1 },                     /* _bmi                              */
-    { "LBMI",  1 },                     /* _lbmi                             */
-    { "BNE",   1 },                     /* _bne                              */
-    { "LBNE",  1 },                     /* _lbne                             */
-    { "BPL",   1 },                     /* _bpl                              */
-    { "LBPL",  1 },                     /* _lbpl                             */
-    { "BRA",   1 },                     /* _bra                              */
-    { "LBRA",  1 },                     /* _lbra                             */
-    { "BRN",   1 },                     /* _brn                              */
-    { "LBRN",  1 },                     /* _lbrn                             */
-    { "BSR",   1 },                     /* _bsr                              */
-    { "LBSR",  1 },                     /* _lbsr                             */
-    { "BVC",   1 },                     /* _bvc                              */
-    { "LBVC",  1 },                     /* _lbvc                             */
-    { "BVS",   1 },                     /* _bvs                              */
-    { "LBVS",  1 },                     /* _lbvs                             */
-    { "CBA",   0 },                     /* _cba                              */
-    { "CLI",   0 },                     /* _cli                              */
-    { "CLRA",  0 },                     /* _clra                             */
-    { "CLRB",  0 },                     /* _clrb                             */
-    { "CLR",   0 },                     /* _clr                              */
-    { "CLC",   0 },                     /* _clc                              */
-    { "CLV",   0 },                     /* _clv                              */
-    { "CMPA",  0 },                     /* _cmpa                             */
-    { "CMPB",  0 },                     /* _cmpb                             */
-    { "CMPD",  0 },                     /* _cmpd                             */
-    { "CMPS",  0 },                     /* _cmps                             */
-    { "CMPU",  0 },                     /* _cmpu                             */
-    { "CMPX",  0 },                     /* _cmpx                             */
-    { "CMPY",  0 },                     /* _cmpy                             */
-    { "COMA",  0 },                     /* _coma                             */
-    { "COMB",  0 },                     /* _comb                             */
-    { "COM",   0 },                     /* _com                              */
-    { "CWAI",  0 },                     /* _cwai                             */
-    { "DAA",   0 },                     /* _daa                              */
-    { "DECA",  0 },                     /* _deca                             */
-    { "DECB",  0 },                     /* _decb                             */
-    { "DEC",   0 },                     /* _dec                              */
-    { "DES",   0 },                     /* _des                              */
-    { "DEX",   0 },                     /* _dex                              */
-    { "EORA",  0 },                     /* _eora                             */
-    { "EORB",  0 },                     /* _eorb                             */
-    { "EXG",   0 },                     /* _exg                              */
-    { "INCA",  0 },                     /* _inca                             */
-    { "INCB",  0 },                     /* _incb                             */
-    { "INC",   0 },                     /* _inc                              */
-    { "INS",   0 },                     /* _ins                              */
-    { "INX",   0 },                     /* _inx                              */
-    { "JMP",   1 },                     /* _jmp                              */
-    { "JSR",   1 },                     /* _jsr                              */
-    { "LDA",   0 },                     /* _lda                              */
-    { "LDB",   0 },                     /* _ldb                              */
-    { "LDD",   0 },                     /* _ldd                              */
-    { "LDS",   0 },                     /* _lds                              */
-    { "LDU",   0 },                     /* _ldu                              */
-    { "LDX",   0 },                     /* _ldx                              */
-    { "LDY",   0 },                     /* _ldy                              */
-    { "LEAS",  0 },                     /* _leas                             */
-    { "LEAU",  0 },                     /* _leau                             */
-    { "LEAX",  0 },                     /* _leax                             */
-    { "LEAY",  0 },                     /* _leay                             */
-    { "LSRA",  0 },                     /* _lsra                             */
-    { "LSRB",  0 },                     /* _lsrb                             */
-    { "LSR",   0 },                     /* _lsr                              */
-    { "MUL",   0 },                     /* _mul                              */
-    { "NEGA",  0 },                     /* _nega                             */
-    { "NEGB",  0 },                     /* _negb                             */
-    { "NEG",   0 },                     /* _neg                              */
-    { "NOP",   0 },                     /* _nop                              */
-    { "ORA",   0 },                     /* _ora                              */
-    { "ORB",   0 },                     /* _orb                              */
-    { "ORCC",  0 },                     /* _orcc                             */
-    { "PSHA",  0 },                     /* _psha                             */
-    { "PSHB",  0 },                     /* _pshb                             */
-    { "PSHS",  0 },                     /* _pshs                             */
-    { "PSHU",  0 },                     /* _pshu                             */
-    { "PULA",  0 },                     /* _pula                             */
-    { "PULB",  0 },                     /* _pulb                             */
-    { "PULS",  0 },                     /* _puls                             */
-    { "PULU",  0 },                     /* _pulu                             */
-    { "ROLA",  0 },                     /* _rola                             */
-    { "ROLB",  0 },                     /* _rolb                             */
-    { "ROL",   0 },                     /* _rol                              */
-    { "RORA",  0 },                     /* _rora                             */
-    { "RORB",  0 },                     /* _rorb                             */
-    { "ROR",   0 },                     /* _ror                              */
-    { "RTI",   0 },                     /* _rti                              */
-    { "RTS",   0 },                     /* _rts                              */
-    { "SBA",   0 },                     /* _sba                              */
-    { "SBCA",  0 },                     /* _sbca                             */
-    { "SBCB",  0 },                     /* _sbcb                             */
-    { "SEC",   0 },                     /* _sec                              */
-    { "SEI",   0 },                     /* _sei                              */
-    { "SEV",   0 },                     /* _sev                              */
-    { "SEX",   0 },                     /* _sex                              */
-    { "SEZ",   0 },                     /* _sez                              */
-    { "STA",   0 },                     /* _sta                              */
-    { "STB",   0 },                     /* _stb                              */
-    { "STD",   0 },                     /* _std                              */
-    { "STS",   0 },                     /* _sts                              */
-    { "STU",   0 },                     /* _stu                              */
-    { "STX",   0 },                     /* _stx                              */
-    { "STY",   0 },                     /* _sty                              */
-    { "SUBA",  0 },                     /* _suba                             */
-    { "SUBB",  0 },                     /* _subb                             */
-    { "SUBD",  0 },                     /* _subd                             */
-    { "SWI",   0 },                     /* _swi                              */
-    { "SWI2",  0 },                     /* _swi2                             */
-    { "SWI3",  0 },                     /* _swi3                             */
-    { "SYNC",  0 },                     /* _sync                             */
-    { "TAB",   0 },                     /* _tab                              */
-    { "TAP",   0 },                     /* _tap                              */
-    { "TBA",   0 },                     /* _tba                              */
-    { "TFR",   0 },                     /* _tfr                              */
-    { "TPA",   0 },                     /* _tpa                              */
-    { "TSTA",  0 },                     /* _tsta                             */
-    { "TSTB",  0 },                     /* _tstb                             */
-    { "TST",   0 },                     /* _tst                              */
-    { "TSX",   0 },                     /* _tsx                              */
-    { "TXS",   0 },                     /* _txs                              */
-    { "WAI",   0 },                     /* _wai                              */
-    { "RESET", 0 },                     /* _reset                            */
-  /* 6800 EXTRA OPCODES */
-    { "CPX",   0 },                     /* _cpx                              */
-  /* 6309 EXTRA OPCODES */
-    { "AIM",   0 },                     /* _aim                              */
-    { "EIM",   0 },                     /* _eim                              */
-    { "OIM",   0 },                     /* _oim                              */
-    { "TIM",   0 },                     /* _tim                              */
-    { "BAND",  0 },                     /* _band                             */
-    { "BIAND", 0 },                     /* _biand                            */
-    { "BOR",   0 },                     /* _bor                              */
-    { "BIOR",  0 },                     /* _bior                             */
-    { "BEOR",  0 },                     /* _beor                             */
-    { "BIEOR", 0 },                     /* _bieor                            */
-    { "LDBT",  0 },                     /* _ldbt                             */
-    { "STBT",  0 },                     /* _stbt                             */
-    { "TFM",   0 },                     /* _tfm                              */
-    { "ADCD",  0 },                     /* _adcd                             */
-    { "ADCR",  0 },                     /* _adcr                             */
-    { "ADDE",  0 },                     /* _adde                             */
-    { "ADDF",  0 },                     /* _addf                             */
-    { "ADDW",  0 },                     /* _addw                             */
-    { "ADDR",  0 },                     /* _addr                             */
-    { "ANDD",  0 },                     /* _andd                             */
-    { "ANDR",  0 },                     /* _andr                             */
-    { "ASLD",  0 },                     /* _asld                             */
-    { "ASRD",  0 },                     /* _asrd                             */
-    { "BITD",  0 },                     /* _bitd                             */
-    { "BITMD", 0 },                     /* _bitmd                            */
-    { "CLRD",  0 },                     /* _clrd                             */
-    { "CLRE",  0 },                     /* _clre                             */
-    { "CLRF",  0 },                     /* _clrf                             */
-    { "CLRW",  0 },                     /* _clrw                             */
-    { "CMPE",  0 },                     /* _cmpe                             */
-    { "CMPF",  0 },                     /* _cmpf                             */
-    { "CMPW",  0 },                     /* _cmpw                             */
-    { "CMPR",  0 },                     /* _cmpr                             */
-    { "COMD",  0 },                     /* _comd                             */
-    { "COME",  0 },                     /* _come                             */
-    { "COMF",  0 },                     /* _comf                             */
-    { "COMW",  0 },                     /* _comw                             */
-    { "DECD",  0 },                     /* _dedc                             */
-    { "DECE",  0 },                     /* _dece                             */
-    { "DECF",  0 },                     /* _decf                             */
-    { "DECW",  0 },                     /* _decw                             */
-    { "DIVD",  0 },                     /* _divd                             */
-    { "DIVQ",  0 },                     /* _divq                             */
-    { "EORD",  0 },                     /* _eord                             */
-    { "EORR",  0 },                     /* _eorr                             */
-    { "INCD",  0 },                     /* _incd                             */
-    { "INCE",  0 },                     /* _ince                             */
-    { "INCF",  0 },                     /* _incf                             */
-    { "INCW",  0 },                     /* _incw                             */
-    { "LDE",   0 },                     /* _lde                              */
-    { "LDF",   0 },                     /* _ldf                              */
-    { "LDQ",   0 },                     /* _ldq                              */
-    { "LDW",   0 },                     /* _ldw                              */
-    { "LDMD",  0 },                     /* _ldmd                             */
-    { "LSRD",  0 },                     /* _lsrd                             */
-    { "LSRW",  0 },                     /* _lsrw                             */
-    { "MULD",  0 },                     /* _muld                             */
-    { "NEGD",  0 },                     /* _negd                             */
-    { "ORD",   0 },                     /* _ord                              */
-    { "ORR",   0 },                     /* _orr                              */
-    { "PSHSW", 0 },                     /* _pshsw                            */
-    { "PSHUW", 0 },                     /* _pshuw                            */
-    { "PULSW", 0 },                     /* _pulsw                            */
-    { "PULUW", 0 },                     /* _puluw                            */
-    { "ROLD",  0 },                     /* _rold                             */
-    { "ROLW",  0 },                     /* _rolw                             */
-    { "RORD",  0 },                     /* _rord                             */
-    { "RORW",  0 },                     /* _rorw                             */
-    { "SBCD",  0 },                     /* _sbcd                             */
-    { "SBCR",  0 },                     /* _sbcr                             */
-    { "SEXW",  0 },                     /* _sexw                             */
-    { "STE",   0 },                     /* _ste                              */
-    { "STF",   0 },                     /* _stf                              */
-    { "STQ",   0 },                     /* _stq                              */
-    { "STW",   0 },                     /* _stw                              */
-    { "SUBE",  0 },                     /* _sube                             */
-    { "SUBF",  0 },                     /* _subf                             */
-    { "SUBW",  0 },                     /* _subw                             */
-    { "SUBR",  0 },                     /* _subr                             */
-    { "TSTD",  0 },                     /* _tstd                             */
-    { "TSTE",  0 },                     /* _tste                             */
-    { "TSTF",  0 },                     /* _tstf                             */
-    { "TSTW",  0 },                     /* _tstw                             */
-
   };
 
 char *os9_codes[0x100] =
@@ -687,425 +370,6 @@ byte m6800_codes[512] =
   _ill  ,_nom,   _ill  ,_nom,   _ldx  ,_ext,   _stx  ,_ext,     /* FC..FF */
   };
 
-byte h6309_codes[512] =
-  {
-  _neg  ,_dir,   _oim  ,_bd ,   _aim  ,_bd ,   _com  ,_dir,     /* 00..03 */
-  _lsr  ,_dir,   _eim  ,_bd ,   _ror  ,_dir,   _asr  ,_dir,     /* 04..07 */
-  _asl  ,_dir,   _rol  ,_dir,   _dec  ,_dir,   _tim  ,_bd ,     /* 08..0B */
-  _inc  ,_dir,   _tst  ,_dir,   _jmp  ,_dir,   _clr  ,_dir,     /* 0C..0F */
-  _ill  ,_nom,   _ill  ,_nom,   _nop  ,_imp,   _sync ,_imp,     /* 10..13 */
-  _sexw ,_imp,   _ill  ,_nom,   _lbra ,_rew,   _lbsr ,_rew,     /* 14..17 */
-  _ill  ,_nom,   _daa  ,_imp,   _orcc ,_imb,   _ill  ,_nom,     /* 18..1B */
-  _andcc,_imb,   _sex  ,_imp,   _exg  ,_r1 ,   _tfr  ,_r1 ,     /* 1C..1F */
-  _bra  ,_reb,   _brn  ,_reb,   _bhi  ,_reb,   _bls  ,_reb,     /* 20..23 */
-  _bcc  ,_reb,   _bcs  ,_reb,   _bne  ,_reb,   _beq  ,_reb,     /* 24..27 */
-  _bvc  ,_reb,   _bvs  ,_reb,   _bpl  ,_reb,   _bmi  ,_reb,     /* 28..2B */
-  _bge  ,_reb,   _blt  ,_reb,   _bgt  ,_reb,   _ble  ,_reb,     /* 2C..2F */
-  _leax ,_ind,   _leay ,_ind,   _leas ,_ind,   _leau ,_ind,     /* 30..33 */
-  _pshs ,_r2 ,   _puls ,_r2 ,   _pshu ,_r3 ,   _pulu ,_r3 ,     /* 34..37 */
-  _ill  ,_nom,   _rts  ,_imp,   _abx  ,_imp,   _rti  ,_imp,     /* 38..3B */
-  _cwai ,_imb,   _mul  ,_imp,   _reset,_imp,   _swi  ,_imp,     /* 3C..3F */
-  _nega ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _coma ,_imp,     /* 40..43 */
-  _lsra ,_imp,   _ill  ,_nom,   _rora ,_imp,   _asra ,_imp,     /* 44..47 */
-  _asla ,_imp,   _rola ,_imp,   _deca ,_imp,   _ill  ,_nom,     /* 48..4B */
-  _inca ,_imp,   _tsta ,_imp,   _ill  ,_nom,   _clra ,_imp,     /* 4C..4F */
-  _negb ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _comb ,_imp,     /* 50..53 */
-  _lsrb ,_imp,   _ill  ,_nom,   _rorb ,_imp,   _asrb ,_imp,     /* 54..57 */
-  _aslb ,_imp,   _rolb ,_imp,   _decb ,_imp,   _ill  ,_nom,     /* 58..5B */
-  _incb ,_imp,   _tstb ,_imp,   _ill  ,_nom,   _clrb ,_imp,     /* 5C..5F */
-  _neg  ,_ind,   _oim  ,_bi ,   _aim  ,_bi ,   _com  ,_ind,     /* 60..63 */
-  _lsr  ,_ind,   _eim  ,_bi ,   _ror  ,_ind,   _asr  ,_ind,     /* 64..67 */
-  _asl  ,_ind,   _rol  ,_ind,   _dec  ,_ind,   _tim  ,_bi ,     /* 68..6B */
-  _inc  ,_ind,   _tst  ,_ind,   _jmp  ,_ind,   _clr  ,_ind,     /* 6C..6F */
-  _neg  ,_ext,   _oim  ,_be ,   _aim  ,_be ,   _com  ,_ext,     /* 70..73 */
-  _lsr  ,_ext,   _eim  ,_be ,   _ror  ,_ext,   _asr  ,_ext,     /* 74..77 */
-  _asl  ,_ext,   _rol  ,_ext,   _dec  ,_ext,   _tim  ,_be ,     /* 78..7B */
-  _inc  ,_ext,   _tst  ,_ext,   _jmp  ,_ext,   _clr  ,_ext,     /* 7C..7F */
-  _suba ,_imb,   _cmpa ,_imb,   _sbca ,_imb,   _subd ,_imw,     /* 80..83 */
-  _anda ,_imb,   _bita ,_imb,   _lda  ,_imb,   _ill  ,_nom,     /* 84..87 */
-  _eora ,_imb,   _adca ,_imb,   _ora  ,_imb,   _adda ,_imb,     /* 88..8B */
-  _cmpx ,_imw,   _bsr  ,_reb,   _ldx  ,_imw,   _ill  ,_nom,     /* 8C..8F */
-  _suba ,_dir,   _cmpa ,_dir,   _sbca ,_dir,   _subd ,_dir,     /* 90..93 */
-  _anda ,_dir,   _bita ,_dir,   _lda  ,_dir,   _sta  ,_dir,     /* 94..97 */
-  _eora ,_dir,   _adca ,_dir,   _ora  ,_dir,   _adda ,_dir,     /* 98..9B */
-  _cmpx ,_dir,   _jsr  ,_dir,   _ldx  ,_dir,   _stx  ,_dir,     /* 9C..9F */
-  _suba ,_ind,   _cmpa ,_ind,   _sbca ,_ind,   _subd ,_ind,     /* A0..A3 */
-  _anda ,_ind,   _bita ,_ind,   _lda  ,_ind,   _sta  ,_ind,     /* A4..A7 */
-  _eora ,_ind,   _adca ,_ind,   _ora  ,_ind,   _adda ,_ind,     /* A8..AB */
-  _cmpx ,_ind,   _jsr  ,_ind,   _ldx  ,_ind,   _stx  ,_ind,     /* AC..AF */
-  _suba ,_ext,   _cmpa ,_ext,   _sbca ,_ext,   _subd ,_ext,     /* B0..B3 */
-  _anda ,_ext,   _bita ,_ext,   _lda  ,_ext,   _sta  ,_ext,     /* B4..B7 */
-  _eora ,_ext,   _adca ,_ext,   _ora  ,_ext,   _adda ,_ext,     /* B8..BB */
-  _cmpx ,_ext,   _jsr  ,_ext,   _ldx  ,_ext,   _stx  ,_ext,     /* BC..BF */
-  _subb ,_imb,   _cmpb ,_imb,   _sbcb ,_imb,   _addd ,_imw,     /* C0..C3 */
-  _andb ,_imb,   _bitb ,_imb,   _ldb  ,_imb,   _ill  ,_nom,     /* C4..C7 */
-  _eorb ,_imb,   _adcb ,_imb,   _orb  ,_imb,   _addb ,_imb,     /* C8..CB */
-  _ldd  ,_imw,   _ldq  ,_iml,   _ldu  ,_imw,   _ill  ,_nom,     /* CC..CF */
-  _subb ,_dir,   _cmpb ,_dir,   _sbcb ,_dir,   _addd ,_dir,     /* D0..D3 */
-  _andb ,_dir,   _bitb ,_dir,   _ldb  ,_dir,   _stb  ,_dir,     /* D4..D7 */
-  _eorb ,_dir,   _adcb ,_dir,   _orb  ,_dir,   _addb ,_dir,     /* D8..DB */
-  _ldd  ,_dir,   _std  ,_dir,   _ldu  ,_dir,   _stu  ,_dir,     /* DC..DF */
-  _subb ,_ind,   _cmpb ,_ind,   _sbcb ,_ind,   _addd ,_ind,     /* E0..E3 */
-  _andb ,_ind,   _bitb ,_ind,   _ldb  ,_ind,   _stb  ,_ind,     /* E4..E7 */
-  _eorb ,_ind,   _adcb ,_ind,   _orb  ,_ind,   _addb ,_ind,     /* E8..EB */
-  _ldd  ,_ind,   _std  ,_ind,   _ldu  ,_ind,   _stu  ,_ind,     /* EC..EF */
-  _subb ,_ext,   _cmpb ,_ext,   _sbcb ,_ext,   _addd ,_ext,     /* F0..F3 */
-  _andb ,_ext,   _bitb ,_ext,   _ldb  ,_ext,   _stb  ,_ext,     /* F4..F7 */
-  _eorb ,_ext,   _adcb ,_ext,   _orb  ,_ext,   _addb ,_ext,     /* F8..FB */
-  _ldd  ,_ext,   _std  ,_ext,   _ldu  ,_ext,   _stu  ,_ext,     /* FC..FF */
-  };
-
-byte m6809_codes[512] =
-  {
-  _neg  ,_dir,   _ill  ,_nom,   _ill  ,_nom,   _com  ,_dir,     /* 00..03 */
-  _lsr  ,_dir,   _ill  ,_nom,   _ror  ,_dir,   _asr  ,_dir,     /* 04..07 */
-  _asl  ,_dir,   _rol  ,_dir,   _dec  ,_dir,   _ill  ,_nom,     /* 08..0B */
-  _inc  ,_dir,   _tst  ,_dir,   _jmp  ,_dir,   _clr  ,_dir,     /* 0C..0F */
-  _ill  ,_nom,   _ill  ,_nom,   _nop  ,_imp,   _sync ,_imp,     /* 10..13 */
-  _ill  ,_nom,   _ill  ,_nom,   _lbra ,_rew,   _lbsr ,_rew,     /* 14..17 */
-  _ill  ,_nom,   _daa  ,_imp,   _orcc ,_imb,   _ill  ,_nom,     /* 18..1B */
-  _andcc,_imb,   _sex  ,_imp,   _exg  ,_r1 ,   _tfr  ,_r1 ,     /* 1C..1F */
-  _bra  ,_reb,   _brn  ,_reb,   _bhi  ,_reb,   _bls  ,_reb,     /* 20..23 */
-  _bcc  ,_reb,   _bcs  ,_reb,   _bne  ,_reb,   _beq  ,_reb,     /* 24..27 */
-  _bvc  ,_reb,   _bvs  ,_reb,   _bpl  ,_reb,   _bmi  ,_reb,     /* 28..2B */
-  _bge  ,_reb,   _blt  ,_reb,   _bgt  ,_reb,   _ble  ,_reb,     /* 2C..2F */
-  _leax ,_ind,   _leay ,_ind,   _leas ,_ind,   _leau ,_ind,     /* 30..33 */
-  _pshs ,_r2 ,   _puls ,_r2 ,   _pshu ,_r3 ,   _pulu ,_r3 ,     /* 34..37 */
-  _ill  ,_nom,   _rts  ,_imp,   _abx  ,_imp,   _rti  ,_imp,     /* 38..3B */
-  _cwai ,_imb,   _mul  ,_imp,   _reset,_imp,   _swi  ,_imp,     /* 3C..3F */
-  _nega ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _coma ,_imp,     /* 40..43 */
-  _lsra ,_imp,   _ill  ,_nom,   _rora ,_imp,   _asra ,_imp,     /* 44..47 */
-  _asla ,_imp,   _rola ,_imp,   _deca ,_imp,   _ill  ,_nom,     /* 48..4B */
-  _inca ,_imp,   _tsta ,_imp,   _ill  ,_nom,   _clra ,_imp,     /* 4C..4F */
-  _negb ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _comb ,_imp,     /* 50..53 */
-  _lsrb ,_imp,   _ill  ,_nom,   _rorb ,_imp,   _asrb ,_imp,     /* 54..57 */
-  _aslb ,_imp,   _rolb ,_imp,   _decb ,_imp,   _ill  ,_nom,     /* 58..5B */
-  _incb ,_imp,   _tstb ,_imp,   _ill  ,_nom,   _clrb ,_imp,     /* 5C..5F */
-  _neg  ,_ind,   _ill  ,_nom,   _ill  ,_nom,   _com  ,_ind,     /* 60..63 */
-  _lsr  ,_ind,   _ill  ,_nom,   _ror  ,_ind,   _asr  ,_ind,     /* 64..67 */
-  _asl  ,_ind,   _rol  ,_ind,   _dec  ,_ind,   _ill  ,_nom,     /* 68..6B */
-  _inc  ,_ind,   _tst  ,_ind,   _jmp  ,_ind,   _clr  ,_ind,     /* 6C..6F */
-  _neg  ,_ext,   _ill  ,_nom,   _ill  ,_nom,   _com  ,_ext,     /* 70..73 */
-  _lsr  ,_ext,   _ill  ,_nom,   _ror  ,_ext,   _asr  ,_ext,     /* 74..77 */
-  _asl  ,_ext,   _rol  ,_ext,   _dec  ,_ext,   _ill  ,_nom,     /* 78..7B */
-  _inc  ,_ext,   _tst  ,_ext,   _jmp  ,_ext,   _clr  ,_ext,     /* 7C..7F */
-  _suba ,_imb,   _cmpa ,_imb,   _sbca ,_imb,   _subd ,_imw,     /* 80..83 */
-  _anda ,_imb,   _bita ,_imb,   _lda  ,_imb,   _ill  ,_nom,     /* 84..87 */
-  _eora ,_imb,   _adca ,_imb,   _ora  ,_imb,   _adda ,_imb,     /* 88..8B */
-  _cmpx ,_imw,   _bsr  ,_reb,   _ldx  ,_imw,   _ill  ,_nom,     /* 8C..8F */
-  _suba ,_dir,   _cmpa ,_dir,   _sbca ,_dir,   _subd ,_dir,     /* 90..93 */
-  _anda ,_dir,   _bita ,_dir,   _lda  ,_dir,   _sta  ,_dir,     /* 94..97 */
-  _eora ,_dir,   _adca ,_dir,   _ora  ,_dir,   _adda ,_dir,     /* 98..9B */
-  _cmpx ,_dir,   _jsr  ,_dir,   _ldx  ,_dir,   _stx  ,_dir,     /* 9C..9F */
-  _suba ,_ind,   _cmpa ,_ind,   _sbca ,_ind,   _subd ,_ind,     /* A0..A3 */
-  _anda ,_ind,   _bita ,_ind,   _lda  ,_ind,   _sta  ,_ind,     /* A4..A7 */
-  _eora ,_ind,   _adca ,_ind,   _ora  ,_ind,   _adda ,_ind,     /* A8..AB */
-  _cmpx ,_ind,   _jsr  ,_ind,   _ldx  ,_ind,   _stx  ,_ind,     /* AC..AF */
-  _suba ,_ext,   _cmpa ,_ext,   _sbca ,_ext,   _subd ,_ext,     /* B0..B3 */
-  _anda ,_ext,   _bita ,_ext,   _lda  ,_ext,   _sta  ,_ext,     /* B4..B7 */
-  _eora ,_ext,   _adca ,_ext,   _ora  ,_ext,   _adda ,_ext,     /* B8..BB */
-  _cmpx ,_ext,   _jsr  ,_ext,   _ldx  ,_ext,   _stx  ,_ext,     /* BC..BF */
-  _subb ,_imb,   _cmpb ,_imb,   _sbcb ,_imb,   _addd ,_imw,     /* C0..C3 */
-  _andb ,_imb,   _bitb ,_imb,   _ldb  ,_imb,   _ill  ,_nom,     /* C4..C7 */
-  _eorb ,_imb,   _adcb ,_imb,   _orb  ,_imb,   _addb ,_imb,     /* C8..CB */
-  _ldd  ,_imw,   _ill  ,_nom,   _ldu  ,_imw,   _ill  ,_nom,     /* CC..CF */
-  _subb ,_dir,   _cmpb ,_dir,   _sbcb ,_dir,   _addd ,_dir,     /* D0..D3 */
-  _andb ,_dir,   _bitb ,_dir,   _ldb  ,_dir,   _stb  ,_dir,     /* D4..D7 */
-  _eorb ,_dir,   _adcb ,_dir,   _orb  ,_dir,   _addb ,_dir,     /* D8..DB */
-  _ldd  ,_dir,   _std  ,_dir,   _ldu  ,_dir,   _stu  ,_dir,     /* DC..DF */
-  _subb ,_ind,   _cmpb ,_ind,   _sbcb ,_ind,   _addd ,_ind,     /* E0..E3 */
-  _andb ,_ind,   _bitb ,_ind,   _ldb  ,_ind,   _stb  ,_ind,     /* E4..E7 */
-  _eorb ,_ind,   _adcb ,_ind,   _orb  ,_ind,   _addb ,_ind,     /* E8..EB */
-  _ldd  ,_ind,   _std  ,_ind,   _ldu  ,_ind,   _stu  ,_ind,     /* EC..EF */
-  _subb ,_ext,   _cmpb ,_ext,   _sbcb ,_ext,   _addd ,_ext,     /* F0..F3 */
-  _andb ,_ext,   _bitb ,_ext,   _ldb  ,_ext,   _stb  ,_ext,     /* F4..F7 */
-  _eorb ,_ext,   _adcb ,_ext,   _orb  ,_ext,   _addb ,_ext,     /* F8..FB */
-  _ldd  ,_ext,   _std  ,_ext,   _ldu  ,_ext,   _stu  ,_ext,     /* FC..FF */
-  };
-
-byte h6309_codes10[512] =
-  {
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 04..07 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 08..0B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 0C..0F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 10..13 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 14..17 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 18..1B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 1C..1F */
-  _ill  ,_nom,   _lbrn ,_rew,   _lbhi ,_rew,   _lbls ,_rew,     /* 20..23 */
-  _lbcc ,_rew,   _lbcs ,_rew,   _lbne ,_rew,   _lbeq ,_rew,     /* 24..27 */
-  _lbvc ,_rew,   _lbvs ,_rew,   _lbpl ,_rew,   _lbmi ,_rew,     /* 28..2B */
-  _lbge ,_rew,   _lblt ,_rew,   _lbgt ,_rew,   _lble ,_rew,     /* 2C..2F */
-  _addr ,_r1 ,   _adcr ,_r1 ,   _subr ,_r1 ,   _sbcr ,_r1 ,     /* 30..33 */
-  _andr ,_r1 ,   _orr  ,_r1 ,   _eorr ,_r1 ,   _cmpr ,_r1 ,     /* 34..37 */
-  _pshsw,_imp,   _pulsw,_imp,   _pshuw,_imp,   _puluw,_imp,     /* 38..3B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _swi2 ,_imp,     /* 3C..3F */
-  _negd ,_imp,   _ill  ,_nom,   _ill  ,_nom,   _comd ,_imp,     /* 40..43 */
-  _lsrd ,_imp,   _ill  ,_nom,   _rord ,_imp,   _asrd ,_imp,     /* 44..47 */
-  _asld ,_imp,   _rold ,_imp,   _decd ,_imp,   _ill  ,_nom,     /* 48..4B */
-  _incd ,_imp,   _tstd ,_imp,   _ill  ,_nom,   _clrd ,_imp,     /* 4C..4F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _comw ,_imp,     /* 50..53 */
-  _lsrw ,_imp,   _ill  ,_nom,   _rorw ,_imp,   _ill  ,_nom,     /* 54..57 */
-  _ill  ,_nom,   _rolw ,_imp,   _decw ,_imp,   _ill  ,_nom,     /* 58..5B */
-  _incw ,_imp,   _tstw ,_imp,   _ill  ,_nom,   _clrw ,_imp,     /* 5C..5F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 60..63 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 64..67 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 68..6B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 6C..6F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 70..73 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 74..77 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 78..7B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 7C..7F */
-  _subw ,_imw,   _cmpw ,_imw,   _sbcd ,_imw,   _cmpd ,_imw,     /* 80..83 */
-  _andd ,_imw,   _bitd ,_imw,   _ldw  ,_imw,   _ill  ,_nom,     /* 84..87 */
-  _eord ,_imw,   _adcd ,_imw,   _ord  ,_imw,   _addw ,_imw,     /* 88..8B */
-  _cmpy ,_imw,   _ill  ,_nom,   _ldy  ,_imw,   _ill  ,_nom,     /* 8C..8F */
-  _subw ,_dir,   _cmpw ,_dir,   _sbcd ,_dir,   _cmpd ,_dir,     /* 90..93 */
-  _andd ,_dir,   _bitd ,_dir,   _ldw  ,_dir,   _stw  ,_dir,     /* 94..97 */
-  _eord ,_dir,   _adcd ,_dir,   _ord  ,_dir,   _addw ,_dir,     /* 98..9B */
-  _cmpy ,_dir,   _ill  ,_nom,   _ldy  ,_dir,   _sty  ,_dir,     /* 9C..9F */
-  _subw ,_ind,   _cmpw ,_ind,   _sbcd ,_ind,   _cmpd ,_ind,     /* A0..A3 */
-  _andd ,_ind,   _bitd ,_ind,   _ldw  ,_ind,   _stw  ,_ind,     /* A4..A7 */
-  _eord ,_ind,   _adcd ,_ind,   _ord  ,_ind,   _addw ,_ind,     /* A8..AB */
-  _cmpy ,_ind,   _ill  ,_nom,   _ldy  ,_ind,   _sty  ,_ind,     /* AC..AF */
-  _subw ,_ext,   _cmpw ,_ext,   _sbcd ,_ext,   _cmpd ,_ext,     /* B0..B3 */
-  _andd ,_ext,   _bitd ,_ext,   _ldw  ,_ext,   _stw  ,_ext,     /* B4..B7 */
-  _eord ,_ext,   _adcd ,_ext,   _ord  ,_ext,   _addw ,_ext,     /* B8..BB */
-  _cmpy ,_ext,   _ill  ,_nom,   _ldy  ,_ext,   _sty  ,_ext,     /* BC..BF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C0..C3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C4..C7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C8..CB */
-  _ill  ,_nom,   _ill  ,_nom,   _lds  ,_imw,   _ill  ,_nom,     /* CC..CF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D0..D3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D4..D7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D8..DB */
-  _ldq  ,_dir,   _stq  ,_dir,   _lds  ,_dir,   _sts  ,_dir,     /* DC..DF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E0..E3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E4..E7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E8..EB */
-  _ldq  ,_ind,   _stq  ,_ind,   _lds  ,_ind,   _sts  ,_ind,     /* EC..EF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F0..F3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F4..F7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F8..FB */
-  _ldq  ,_ext,   _stq  ,_ext,   _lds  ,_ext,   _sts  ,_ext,     /* FC..FF */
-  };
-
-byte m6809_codes10[512] =
-  {
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 04..07 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 08..0B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 0C..0F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 10..13 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 14..17 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 18..1B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 1C..1F */
-  _ill  ,_nom,   _lbrn ,_rew,   _lbhi ,_rew,   _lbls ,_rew,     /* 20..23 */
-  _lbcc ,_rew,   _lbcs ,_rew,   _lbne ,_rew,   _lbeq ,_rew,     /* 24..27 */
-  _lbvc ,_rew,   _lbvs ,_rew,   _lbpl ,_rew,   _lbmi ,_rew,     /* 28..2B */
-  _lbge ,_rew,   _lblt ,_rew,   _lbgt ,_rew,   _lble ,_rew,     /* 2C..2F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 30..33 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 34..37 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 38..3B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _swi2 ,_imp,     /* 3C..3F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 40..43 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 44..47 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 48..4B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 4C..4F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 50..53 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 54..57 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 58..5B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 5C..5F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 60..63 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 64..67 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 68..6B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 6C..6F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 70..73 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 74..77 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 78..7B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 7C..7F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpd ,_imw,     /* 80..83 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 84..87 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 88..8B */
-  _cmpy ,_imw,   _ill  ,_nom,   _ldy  ,_imw,   _ill  ,_nom,     /* 8C..8F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpd ,_dir,     /* 90..93 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 94..97 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 98..9B */
-  _cmpy ,_dir,   _ill  ,_nom,   _ldy  ,_dir,   _sty  ,_dir,     /* 9C..9F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpd ,_ind,     /* A0..A3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* A4..A7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* A8..AB */
-  _cmpy ,_ind,   _ill  ,_nom,   _ldy  ,_ind,   _sty  ,_ind,     /* AC..AF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpd ,_ext,     /* B0..B3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* B4..B7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* B8..BB */
-  _cmpy ,_ext,   _ill  ,_nom,   _ldy  ,_ext,   _sty  ,_ext,     /* BC..BF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C0..C3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C4..C7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C8..CB */
-  _ill  ,_nom,   _ill  ,_nom,   _lds  ,_imw,   _ill  ,_nom,     /* CC..CF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D0..D3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D4..D7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D8..DB */
-  _ill  ,_nom,   _ill  ,_nom,   _lds  ,_dir,   _sts  ,_dir,     /* DC..DF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E0..E3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E4..E7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E8..EB */
-  _ill  ,_nom,   _ill  ,_nom,   _lds  ,_ind,   _sts  ,_ind,     /* EC..EF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F0..F3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F4..F7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F8..FB */
-  _ill  ,_nom,   _ill  ,_nom,   _lds  ,_ext,   _sts  ,_ext,     /* FC..FF */
-  };
-
-byte h6309_codes11[512] =
-  {
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 04..07 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 08..0B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 0C..0F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 10..13 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 14..17 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 18..1B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 1C..1F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 20..23 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 24..27 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 28..2B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 2C..2F */
-  _band ,_bt ,   _biand,_bt ,   _bor  ,_bt ,   _bior ,_bt ,     /* 30..33 */
-  _beor ,_bt ,   _bieor,_bt ,   _ldbt ,_bt ,   _stbt ,_bt ,     /* 34..37 */
-  _tfm  ,_t1 ,   _tfm  ,_t2 ,   _tfm  ,_t3 ,   _tfm  ,_t4 ,     /* 38..3B */
-  _bitmd,_imb,   _ldmd ,_imb,   _ill  ,_nom,   _swi3 ,_imp,     /* 3C..3F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _come ,_imp,     /* 40..43 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 44..47 */
-  _ill  ,_nom,   _ill  ,_nom,   _dece ,_imp,   _ill  ,_nom,     /* 48..4B */
-  _ince ,_imp,   _tste ,_imp,   _ill  ,_nom,   _clre ,_imp,     /* 4C..4F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _comf ,_imp,     /* 50..53 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 54..57 */
-  _ill  ,_nom,   _ill  ,_nom,   _decf ,_imp,   _ill  ,_nom,     /* 58..5B */
-  _incf ,_imp,   _tstf ,_imp,   _ill  ,_nom,   _clrf ,_imp,     /* 5C..5F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 60..63 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 64..67 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 68..6B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 6C..6F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 70..73 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 74..77 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 78..7B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 7C..7F */
-  _sube ,_imb,   _cmpe ,_imb,   _ill  ,_nom,   _cmpu ,_imw,     /* 80..83 */
-  _ill  ,_nom,   _ill  ,_nom,   _lde  ,_imb,   _ill  ,_nom,     /* 84..87 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _adde ,_imb,     /* 88..8B */
-  _cmps ,_imw,   _divd ,_imb,   _divq ,_imw,   _muld ,_imw,     /* 8C..8F */
-  _sube ,_dir,   _cmpe ,_dir,   _ill  ,_nom,   _cmpu ,_dir,     /* 90..93 */
-  _ill  ,_nom,   _ill  ,_nom,   _lde  ,_dir,   _ste  ,_dir,     /* 94..97 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _adde ,_dir,     /* 98..9B */
-  _cmps ,_dir,   _divd ,_dir,   _divq ,_dir,   _muld ,_dir,     /* 9C..9F */
-  _sube ,_ind,   _cmpe ,_ind,   _ill  ,_nom,   _cmpu ,_ind,     /* A0..A3 */
-  _ill  ,_nom,   _ill  ,_nom,   _lde  ,_ind,   _ste  ,_ind,     /* A4..A7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _adde ,_ind,     /* A8..AB */
-  _cmps ,_ind,   _divd ,_ind,   _divq ,_ind,   _muld ,_ind,     /* AC..AF */
-  _sube ,_ext,   _cmpe ,_ext,   _ill  ,_nom,   _cmpu ,_ext,     /* B0..B3 */
-  _ill  ,_nom,   _ill  ,_nom,   _lde  ,_ext,   _ste  ,_ext,     /* B4..B7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _adde ,_ext,     /* B8..BB */
-  _cmps ,_ext,   _divd ,_ext,   _divq ,_ext,   _muld ,_ext,     /* BC..BF */
-  _subf ,_imb,   _cmpf ,_imb,   _ill  ,_nom,   _ill  ,_nom,     /* C0..C3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ldf  ,_imb,   _ill  ,_nom,     /* C4..C7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _addf ,_imb,     /* C8..CB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* CC..CF */
-  _subf ,_dir,   _cmpf ,_dir,   _ill  ,_nom,   _ill  ,_nom,     /* D0..D3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ldf  ,_dir,   _stf  ,_dir,     /* D4..D7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _addf ,_dir,     /* D8..DB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* DC..DF */
-  _subf ,_ind,   _cmpf ,_ind,   _ill  ,_nom,   _ill  ,_nom,     /* E0..E3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ldf  ,_ind,   _stf  ,_ind,     /* E4..E7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _addf ,_ind,     /* E8..EB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* EC..EF */
-  _subf ,_ext,   _cmpf ,_ext,   _ill  ,_nom,   _ill  ,_nom,     /* F0..F3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ldf  ,_ext,   _stf  ,_ext,     /* F4..F7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _addf ,_ext,     /* F8..FB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* FC..FF */
-  };
-
-byte m6809_codes11[512] =
-  {
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 04..07 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 08..0B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 0C..0F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 10..13 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 14..17 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 18..1B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 1C..1F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 20..23 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 24..27 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 28..2B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 2C..2F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 30..33 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 34..37 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 38..3B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _swi3 ,_imp,     /* 3C..3F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 40..43 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 44..47 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 48..4B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 4C..4F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 50..53 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 54..57 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 58..5B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 5C..5F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 60..63 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 64..67 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 68..6B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 6C..6F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 70..73 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 74..77 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 78..7B */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 7C..7F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpu ,_imw,     /* 80..83 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 84..87 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 88..8B */
-  _cmps ,_imw,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 8C..8F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpu ,_dir,     /* 90..93 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 94..97 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 98..9B */
-  _cmps ,_dir,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* 9C..9F */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpu ,_ind,     /* A0..A3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* A4..A7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* A8..AB */
-  _cmps ,_ind,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* AC..AF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _cmpu ,_ext,     /* B0..B3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* B4..B7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* B8..BB */
-  _cmps ,_ext,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* BC..BF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C0..C3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C4..C7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* C8..CB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* CC..CF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D0..D3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D4..D7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* D8..DB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* DC..DF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E0..E3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E4..E7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* E8..EB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* EC..EF */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F0..F3 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F4..F7 */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* F8..FB */
-  _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,   _ill  ,_nom,     /* FC..FF */
-  };
-
-char *h6309_exg_tfr[] =
-  {
-  "D", "X", "Y", "U", "S", "PC","W" ,"V",
-  "A", "B", "CC","DP","0", "0", "E", "F"
-  };
-
-char *m6809_exg_tfr[] =
-  {
-  "D", "X", "Y", "U", "S", "PC","??","??",
-  "A", "B", "CC","DP","??","??","??","??"
-  };
 
 char *bit_r[] = {"CC","A","B","??"};
 
@@ -1175,7 +439,7 @@ switch (addr)
   case 0xD403: return "FMSCLS";         /* FMS close                         */
   case 0xD406: return "FMS";
   case 0xC840: return "FCB";            /* standard system FCB               */
-    
+
                                         /* miscellaneous:                    */
   case 0xD435: return "VFYFLG";         /* FMS verify flag                   */
   case 0xC080: return "LINBUF";         /* line buffer                       */
@@ -1195,7 +459,7 @@ switch (addr)
   case 0xCC0E: return "SYSDAT";         /* System date month                 */
   case 0xCC0F: return "SYSDAT+1";       /* System date day                   */
   case 0xCC10: return "SYSDAT+2";       /* System date year                  */
-  case 0xCC11: return "TTYTRM"; 
+  case 0xCC11: return "TTYTRM";
   case 0xCC12: return "COMTBL";         /* user command table                */
   case 0xCC14: return "LINBFP";         /* line buffer pointer               */
   case 0xCC16: return "ESCRET";         /* escape return register            */
@@ -1217,7 +481,7 @@ switch (addr)
   case 0xCC2B: return "MEMEND";         /* memory end                        */
   case 0xCC2D: return "ERRVEC";         /* error name vector                 */
   case 0xCC2F: return "INECHO";         /* file input echo flag              */
-    
+
                                         /* Printer support                   */
   case 0xCCC0: return "PRTINI";         /* printer initialize                */
   case 0xCCD8: return "PRTCHK";         /* printer check                     */
@@ -1246,7 +510,7 @@ switch (addr)
   case 0xde15: return "DDJ_INIT";       /* driver initialize (cold start)    */
   case 0xde18: return "DDJ_WARM";       /* driver initialize (warm start)    */
   case 0xde1b: return "DDJ_SEEK";       /* seek to specified track           */
-    
+
   default:
     {
     static char lbp[20];
@@ -1360,7 +624,7 @@ for (addr = 0xc000; addr < 0xe000; addr++)
     case 0xCC2B:
     case 0xCC2D:
     case 0xCC2F:
-    
+
                                         /* Printer support                   */
     case 0xCCC0:
     case 0xCCD8:
@@ -1502,7 +766,7 @@ if (T & 0x80)
       if (allow_6309_codes)
         break;
       break;
-             
+
     default:
       if (T == 0x9F)
         {
@@ -1568,7 +832,7 @@ else if (IS_BINARY(addr))               /* if a binary                       */
   nDigits *= 4;                         /* convert from digits to bits       */
   s[0] = '%';                           /* prepare a binary value            */
                                         /* now do for all bits               */
-  for (nBit = nDigits - 1; nBit >= 0; nBit--) 
+  for (nBit = nDigits - 1; nBit >= 0; nBit--)
     s[nDigits - nBit] = '0' + (!!(W & (1 << nBit)));
   s[nDigits + 1] = '\0';
   }
@@ -1867,11 +1131,11 @@ if (T & 0x80)
         }
       else
         goto index_error;
-      
+
     index_error:
       sprintf(buf,"???");
       break;
-             
+
     default:
       if (T == 0x9F)
         {
@@ -1923,7 +1187,7 @@ if (T & 0x80)
         sprintf(buf,"???");
       break;
     }
-    
+
   }
 else
   {
@@ -1942,7 +1206,7 @@ else
     sprintf(buf,"%s,%c", signed_string(c, 2, (word)(PC - 1)), R);
 #endif
   }
-  
+
 strcat(buffer,buf);
 return(PC);
 }
@@ -1970,7 +1234,7 @@ if ((codes10) && (T == 0x10))
   MI = T = codes10[W++];
   I = (char *)mnemo[T].mne;
   M = codes10[W];
-  
+
   if ((T == _swi2) && (os9_patch == TRUE))
     {
     T = OPCODE(PC); PC++;
@@ -2030,11 +1294,11 @@ switch(M)
     if (bSetLabel)
       AddLabel(MI, W);
     break;
-    
+
   case _ind:
     PC = index_parse(MI,PC);
     break;
-    
+
   case _ix8:
     PC++;
     break;
@@ -2046,7 +1310,7 @@ switch(M)
     if (bSetLabel)
       AddLabel(MI, W);
     break;
-    
+
   case _rew:
     bSetLabel = !IS_CONST(PC);
     W = ARGWORD(PC); PC += 2;
@@ -2054,7 +1318,7 @@ switch(M)
     if (bSetLabel)
       AddLabel(MI, W);
     break;
-    
+
   case _r1:
     T = ARGBYTE(PC); PC++;
     break;
@@ -2063,7 +1327,7 @@ switch(M)
   case _r3:
     T = ARGBYTE(PC); PC++;
     break;
-    
+
   case _bd:
     M = ARGBYTE(PC); PC++;
     bSetLabel = !IS_CONST(PC);
@@ -2083,7 +1347,7 @@ switch(M)
     if (bSetLabel)
       AddLabel(MI, W);
     break;
-    
+
   case _bt:
     M = ARGBYTE(PC); PC++;
     T = ARGBYTE(PC); PC++;
@@ -2092,30 +1356,30 @@ switch(M)
   case _t1:
     T = ARGBYTE(PC); PC++;
     break;
-    
+
   case _t2:
     T = ARGBYTE(PC); PC++;
     break;
-    
+
   case _t3:
     T = ARGBYTE(PC); PC++;
     break;
-    
+
   case _t4:
     T = ARGBYTE(PC); PC++;
     break;
-    
+
   case _iml:
     W = ARGWORD(PC); PC+=2;
     T = ARGBYTE(PC); PC++;
     M = ARGBYTE(PC); PC++;
     break;
-    
+
   case _bi:
     T = ARGBYTE(PC); PC++;
     PC = index_parse(MI,PC);
     break;
-    
+
   default:
     break;
   }
@@ -2146,7 +1410,7 @@ if ((codes10) && (T == 0x10))
   T = codes10[W++];
   I = (char *)mnemo[T].mne;
   M = codes10[W];
-  
+
   if( (T == _swi2) && (os9_patch == TRUE) )
     {
     T = OPCODE(PC); PC++;
@@ -2319,7 +1583,7 @@ switch (M)
         break;
       }
     break;
-    
+
   case _ix8:
     bGetLabel = !IS_CONST(PC);
     T = ARGBYTE(PC);
@@ -2358,7 +1622,7 @@ switch (M)
               signed_string(nDiff + 2, 2, (word)(PC - 1)));
       }
     break;
-    
+
   case _rew:
     bGetLabel = !IS_CONST(PC);
     W = ARGWORD(PC);
@@ -2366,7 +1630,7 @@ switch (M)
     W += (word)PC;
     sprintf(buffer,"%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 2)));
     break;
-    
+
   case _r1:
     if (useConvenience)
       W = (word)(O << 8) | OPCODE(PC);
@@ -2495,7 +1759,7 @@ switch (M)
       break;
       }
     break;
-    
+
   case _bd:
     M = ARGBYTE(PC); PC++;
     bGetLabel = !IS_CONST(PC);
@@ -2545,7 +1809,7 @@ switch (M)
               label_string(W, bGetLabel, (word)(PC - 2)));
     }
     break;
-    
+
   case _bt:
     M = ARGBYTE(PC); PC++;
     T = ARGBYTE(PC); PC++;
@@ -2572,35 +1836,35 @@ switch (M)
     T = ARGBYTE(PC); PC++;
     sprintf(buffer, "%-7s %s+,%s+", I, block_r[T >> 4], block_r[T & 0xF]);
     break;
-    
+
   case _t2:
     T = ARGBYTE(PC); PC++;
     sprintf(buffer,"%-7s %s-,%s-", I, block_r[T >> 4], block_r[T & 0xF]);
     break;
-    
+
   case _t3:
     T = ARGBYTE(PC); PC++;
     sprintf(buffer,"%-7s %s+,%s", I, block_r[T >> 4], block_r[T & 0xF]);
     break;
-    
+
   case _t4:
     T = ARGBYTE(PC); PC++;
     sprintf(buffer,"%-7s %s,%s+", I, block_r[T >> 4], block_r[T & 0xF]);
     break;
-    
+
   case _iml:
     W = ARGWORD(PC); PC += 2;
     T = ARGBYTE(PC); PC++;
     M = ARGBYTE(PC); PC++;
     sprintf(buffer,"%-7s #$%04X%02X%02X", I, W, T, M);
     break;
-    
+
   case _bi:
     T = ARGBYTE(PC); PC++;
     sprintf(buffer,"%-7s #%s,", I, number_string(T, 2, (word)(PC - 1)));
     PC = index_string(buffer,PC);
     break;
-    
+
   default:
     sprintf(buffer,"%-7s ERROR",I);
   }
@@ -2616,7 +1880,7 @@ switch (M)
     (strncmp(I,"SWI",3)==0)
   )
     trenner=1;
-    
+
 return (PC - pc);
 }
 
@@ -3094,8 +2358,8 @@ while (fgets(szBuf, sizeof(szBuf), fp))
     value = p;
     for (q = p;
         (*q) &&
-        (*q != '\n') && 
-        (*q != '*') && 
+        (*q != '\n') &&
+        (*q != '*') &&
         (*q != ' ') &&
         (*q != '\t');
         q++)
@@ -3706,7 +2970,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
           {
           if (bMod)
             {
-            if ((nType == 5) || 
+            if ((nType == 5) ||
                 ((nType >= 20) && (nType <= 22))) // binary, hex, dec, char
               ATTRBYTE(nFrom) &= ~DATATYPE_CHAR;
             }
@@ -3723,7 +2987,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
           if (nType == 21)  // DEC
             ATTRBYTE(nFrom) &= ~DATATYPE_HEX;
           else
-            ATTRBYTE(nFrom) |= ((nType == 0) ? (AREATYPE_CODE | bDataType) : 
+            ATTRBYTE(nFrom) |= ((nType == 0) ? (AREATYPE_CODE | bDataType) :
                                 (nType == 1) ? (AREATYPE_DATA | bDataType) :
                                 (nType == 5) ? AREATYPE_BINARY :
                                 (nType == 6) ? (AREATYPE_WORD | bDataType) :
@@ -3820,8 +3084,8 @@ while (fgets(szBuf, sizeof(szBuf), fp))
         nTo = nFrom;
       for (q = p;
            (*q) &&
-           (*q != '\n') && 
-           (*q != '*') && 
+           (*q != '\n') &&
+           (*q != '*') &&
            ((nType != 2) || ((*q != ' ') && (*q != '\t')));
            q++)
         {
@@ -4084,7 +3348,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       if (!emitComments)                /* otherwise fall through to...      */
         break;
 
-    // prepend text to ranges           
+    // prepend text to ranges
     case 19 :                           /* PREPEND [addr[-addr]] line        */
 //    nScanned = sscanf(p, "%x-%x", &nFrom, &nTo);
       nScanned = Scan2Hex(p, &nFrom, &nTo);
@@ -4135,7 +3399,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       {
       char *laddr = p;
       int nrel;
-      
+
       for (; (*p) && (*p != ' ') && (*p != '\t'); p++) ;
       if (*p)
         *p++ = '\0';
@@ -4179,7 +3443,7 @@ while (fgets(szBuf, sizeof(szBuf), fp))
       char *laddr = p;
       int nremap;
       int minus = 1;
-      
+
       for (; (*p) && (*p != ' ') && (*p != '\t'); p++) ;
       if (*p)
         *p++ = '\0';
@@ -4463,8 +3727,8 @@ fprintf(out,"        %-7s $%04X\n\n", "ORG", pc);
 lastwasdata=0;
 do
   {
-  trenner=0; 
-  
+  trenner=0;
+
   // RB: this is #define'd now
   // very kludgy solution for now, clean up later ... compiler should optimize that mess away anyway.
 /*
@@ -4492,7 +3756,7 @@ do
     if( (lastwasdata==1) && !((IS_CONST(pc) || IS_DATA(pc))) )
       fprintf(out, "%c------------------------------------------------------------------------\n",cCommChar);
     lastwasdata=0;
-    
+
     // RB:  crude way of checking whether it's an autogenerated label
 		//      user-defined ones have a meaning, therefore we insert an extra newline before and after
 		if( (strlen(p)==5) &&( (p[0]=='M')||(p[0]=='Z') ) )
@@ -4574,9 +3838,9 @@ do
   if ((pc < 0x10000) &&                 /* only if still in range,           */
       (!IS_USED(pc - 1)))               /* if we DID skip something set ORG  */
     fprintf(out, "\n        %-7s $%04X \n\n", "ORG", pc);
-  
+
   // RB: divider bar after jumps and jumpalikes
-  if(trenner==1) 
+  if(trenner==1)
     fprintf(out, "%c------------------------------------------------------------------------\n",cCommChar);
 
   } while (pc <= 0xffff);
@@ -4609,6 +3873,6 @@ if (rels)
 if (remaps)
   free(remaps);
 if (szPrepend)
-  free(szPrepend);  
+  free(szPrepend);
 return 0;
 }
