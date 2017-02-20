@@ -5,7 +5,7 @@ CC=gcc
 CFLAGS=
 
 
-OBJS =	opcode.o mc6809.o mc6309.o f9dasm.o
+OBJS =	opcode.o mc68hc11.o mc6809.o mc6309.o f9dasm.o
 
 f9dasm:$(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
@@ -13,6 +13,7 @@ f9dasm:$(OBJS)
 opcode.o: opcode.c opcode.h
 mc6809.o: mc6809.c mc6809.h
 mc6309.o: mc6309.c mc6309.h
+mc68hc11.o: mc68hc11.c mc68hc11.h
 
 
 hex2bin: hex2bin.c

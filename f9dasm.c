@@ -197,6 +197,7 @@ enum                                    /* available options                 */
   OPTION_COMMENT,
   OPTION_NOCOMMENT,
   OPTION_6800,
+  OPTION_68HC11,
   OPTION_HELP,
   };
 
@@ -230,6 +231,7 @@ static struct
   { "nocomment", OPTION_NOCOMMENT },
   { "6309",      OPTION_6309 },
   { "6800",      OPTION_6800 },
+  { "68hc11",    OPTION_68HC11 },
   { "help",      OPTION_HELP },
   { NULL, 0 }
   };

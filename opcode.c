@@ -277,5 +277,8 @@ typedef unsigned char  byte;
      { "TSTE",  0 },                     /* _tste                             */
      { "TSTF",  0 },                     /* _tstf                             */
      { "TSTW",  0 },                     /* _tstw                             */
-
+     { "bset",  0 }, /* _bset */
+     { "bclr",  0 }, /* _bclr */
+     { "brset", 1 },
+     { "brclr", 1 },
    };

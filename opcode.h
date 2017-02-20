@@ -60,6 +60,7 @@ enum addr_mode
    _t3 ,     /* Block Transfer r0+,r1      */
    _t4 ,     /* Block Transfer r0,r1+      */
    _iml,     /* immediate 32-bit           */
+   _dom,    /* direct bit manipulation */
    };
 
  enum opcodes
@@ -101,6 +102,9 @@ enum addr_mode
    _puluw,_rold, _rolw, _rord, _rorw, _sbcd, _sbcr, _sexw, _ste,
    _stf,  _stq,  _stw,  _sube, _subf, _subw, _subr, _tstd, _tste,
    _tstf, _tstw,
+   /* 68hc11 extra opcodes */
+   _pulx, _pshx, _bset, _bclr, _brset, _brclr,
+
    };
 
 
