@@ -112,7 +112,7 @@ enum addr_mode
      _stf,  _stq,  _stw,  _sube, _subf, _subw, _subr, _tstd, _tste,
      _tstf, _tstw,
      /* 68hc11 extra opcodes */
-     _bset, _bclr, _brset, _brclr, _stop
+     _bset, _bclr, _brset, _brclr, _stop,
 
      };
 
