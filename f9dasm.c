@@ -1735,7 +1735,18 @@ switch(M)
     break;
 
   case _dom:
-    T = ARGBYTE(PC); PC++;
+  bSetLabel = !IS_CONST(PC);
+  T = ARGBYTE(PC);
+  PC++;
+  if (dp >= 0)
+    {
+    W = (word)((dp << 8) | T);
+    if (bSetLabel)
+      {
+      W = PhaseInner(W, (word)(PC - 1));
+      AddLabel(MI, W);
+      }
+    }
     M = ARGBYTE(PC); PC++;
     break;
 
