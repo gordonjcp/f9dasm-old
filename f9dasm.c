@@ -1739,6 +1739,12 @@ switch(M)
     M = ARGBYTE(PC); PC++;
     break;
 
+  case _dxom:
+    T = ARGBYTE(PC); PC++;
+    M = ARGBYTE(PC); PC++;
+    break;
+
+
   default:
     break;
   }
@@ -2233,10 +2239,41 @@ switch (M)
     break;
 
   case _dom:
-    T = ARGBYTE(PC); PC++;
+    bGetLabel = !IS_CONST(PC);
+    T = ARGBYTE(PC);PC++;
     M = ARGBYTE(PC); PC++;
-    sprintf(buffer, "%-7s %02x,%s", I, T, number_string(M, 2, (word)(PC-1)));
+    if (dp >= 0)
+      {
+      W = (word)((dp << 8) | T);
+      if (bGetLabel)
+        W = PhaseInner(W, (word)(PC - 1));
+        sprintf(buffer, "%-7s %s, $%02x", I, label_string(W, bGetLabel, (word)(PC-1)), M);
+      //sprintf(buffer, "%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 1)));
+      }
+    else
+      //sprintf(buffer, "%-7s <%s", I, number_string(T, 2, (word)(PC - 1)));
+      sprintf(buffer, "%-7s %s, $%02x", I, number_string(T, 2, (word)(PC-1)), M);
     break;
+  case _dxom:
+      bGetLabel = !IS_CONST(PC);
+      T = ARGBYTE(PC); PC++;
+      M = ARGBYTE(PC); PC++;
+
+      if (rels[PC - 1])
+        {
+        W = (int)((unsigned char)T) + rels[PC - 1];
+        sprintf(buf, "%s,X $%02x",
+                label_string((word)((int)((unsigned char)T)), bGetLabel, (word)(PC - 1)), M);
+        }
+       /* omit '$00', unless the user has set the 'showzero' option */
+      else if (!T && !showIndexedModeZeroOperand)
+        sprintf(buf, ",X $%02x", M);
+      else
+        sprintf(buf, "%s,X $%02x",
+                number_string((word)((unsigned char)T), 2, (word)(PC - 1)), M);
+
+      sprintf(buffer, "%-7s %s", I, buf);
+      break;
 
   default:
     sprintf(buffer,"%-7s ERROR",I);

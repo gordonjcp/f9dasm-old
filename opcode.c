@@ -288,4 +288,5 @@ typedef unsigned char  byte;
      { "bclr",  0 }, /* _bclr */
      { "brset", 1 },
      { "brclr", 1 },
+     { "stop", 0 },
    };

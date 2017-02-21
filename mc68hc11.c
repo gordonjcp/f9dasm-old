@@ -37,7 +37,7 @@ _clc  ,_imp,   _sec  ,_imp,   _cli  ,_imp,   _sei  ,_imp,     /* 0C..0F */
 _sba  ,_imp,   _cba  ,_imp,   _brset,_imb,   _brclr,_imb,     /* 10..13 */
 _bset ,_dom,   _bclr ,_dom,   _tab  ,_imp,   _tba  ,_imp,     /* 14..17 */
 _ill  ,_nom,   _daa  ,_imp,   _ill  ,_nom,   _aba  ,_imp,     /* 18..1B */
-_bset ,_ix8,   _bclr ,_ix8,   _brset, _be,   _brclr, _be,     /* 1C..1F */
+_bset ,_dxom,  _bclr ,_dxom,  _brset, _be,   _brclr, _be,     /* 1C..1F */
 _bra  ,_reb,   _brn  ,_reb,   _bhi  ,_reb,   _bls  ,_reb,     /* 20..23 */
 _bcc  ,_reb,   _bcs  ,_reb,   _bne  ,_reb,   _beq  ,_reb,     /* 24..27 */
 _bvc  ,_reb,   _bvs  ,_reb,   _bpl  ,_reb,   _bmi  ,_reb,     /* 28..2B */
@@ -81,7 +81,7 @@ _cpx  ,_ext,   _jsr  ,_ext,   _lds  ,_ext,   _sts  ,_ext,     /* BC..BF */
 _subb ,_imb,   _cmpb ,_imb,   _sbcb ,_imb,   _addd ,_imw,     /* C0..C3 */
 _andb ,_imb,   _bitb ,_imb,   _ldb  ,_imb,   _ill  ,_nom,     /* C4..C7 */
 _eorb ,_imb,   _adcb ,_imb,   _orb  ,_imb,   _addb ,_imb,     /* C8..CB */
-_ldd  ,_imw,   _ill  ,_nom,   _ldx  ,_imw,   _ill  ,_nom,     /* CC..CF */
+_ldd  ,_imw,   _ill  ,_nom,   _ldx  ,_imw,   _stop  ,_imp,     /* CC..CF */
 _subb ,_dir,   _cmpb ,_dir,   _sbcb ,_dir,   _addd ,_dir,     /* D0..D3 */
 _andb ,_dir,   _bitb ,_dir,   _ldb  ,_dir,   _stb  ,_dir,     /* D4..D7 */
 _eorb ,_dir,   _adcb ,_dir,   _orb  ,_dir,   _addb ,_dir,     /* D8..DB */
