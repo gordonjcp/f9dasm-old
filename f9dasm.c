@@ -1547,8 +1547,8 @@ return nDP;
 
 unsigned Parse(unsigned pc)
 {
-byte O,T,M;
-word W;
+byte O,T,M,R;
+word W, W2;
 int MI;
 char *I;
 unsigned PC = pc;
@@ -1645,12 +1645,13 @@ switch(M)
     break;
 
   case _reb:
-    bSetLabel = !IS_CONST(PC);
-    T = ARGBYTE(PC); PC++;
-    W = (word)(PC + (signed char)T);
+    // calculate relative branch
+    bSetLabel = !IS_CONST(PC);  // set label if this isn't in a defined constant
+    T = ARGBYTE(PC); PC++;  // branch offset
+    W = (word)(PC + (signed char)T);  // address to branch to
     if (bSetLabel)
       {
-      W = DephaseOuter(W, (word)(PC - 1));
+      W = DephaseOuter(W, (word)(PC - 1));  //
       AddLabel(MI, W);
       }
     break;
@@ -1757,21 +1758,28 @@ switch(M)
 
   case _br4:
     bSetLabel = !IS_CONST(PC);
-    T = ARGBYTE(PC);
-    PC++;
-    if (dp >= 0)
-      {
-      W = (word)((dp << 8) | T);
-      if (bSetLabel)
-        {
-        W = PhaseInner(W, (word)(PC - 1));
-        AddLabel(MI, W);
-        }
-      }
-      M = ARGBYTE(PC); PC++;
-      M = ARGBYTE(PC); PC++;
 
-      break;
+    // variable byte
+    T = ARGBYTE(PC); PC++;  // address
+    M = ARGBYTE(PC); PC++;  // bitfield
+    R = ARGBYTE(PC); PC++;  // branch offset
+
+    // label for variable
+    if (dp >= 0) {
+      W = (word)((dp << 8) | T);
+      if (bSetLabel) {
+        W = PhaseInner(W, (word)(PC - 3));
+        AddLabel(MI, W);
+      }
+    }
+
+    // label for branch
+    W2 = (word)(PC + (signed char)R);  // address to branch to
+    if (bSetLabel) {
+      W2 = DephaseOuter(W2, (word)(PC - 1));
+      AddLabel(MI, W2);
+    }
+  break;
 
   default:
     break;
@@ -1786,8 +1794,8 @@ return (PC - pc);
 
 unsigned Dasm (char *buffer, unsigned pc)
 {
-byte O,T,M;
-word W;
+byte O,T,M,R;
+word W, W2;
 char *I;
 char buf[256];
 unsigned PC = pc;
@@ -2282,6 +2290,7 @@ switch (M)
       //sprintf(buffer, "%-7s <%s", I, number_string(T, 2, (word)(PC - 1)));
       sprintf(buffer, "%-7s %s, $%02x", I, number_string(T, 2, (word)(PC-1)), M);
     break;
+
   case _dxom:
       bGetLabel = !IS_CONST(PC);
       T = ARGBYTE(PC); PC++;
@@ -2307,20 +2316,48 @@ switch (M)
         bGetLabel = !IS_CONST(PC);
         T = ARGBYTE(PC);PC++;
         M = ARGBYTE(PC); PC++;
+        R = ARGBYTE(PC); PC++;
         if (dp >= 0)
           {
           W = (word)((dp << 8) | T);
+          W2 = (word)(PC + (signed char)R);  // address to branch to
+
           if (bGetLabel)
-            W = PhaseInner(W, (word)(PC - 1));
-            sprintf(buffer, "%-7s %s, $%02x $%02x", I, label_string(W, bGetLabel, (word)(PC-1)), M, ARGBYTE(PC));
-          //sprintf(buffer, "%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 1)));
+            W = PhaseInner(W, (word)(PC - 3));
+            W2 = DephaseOuter(W2, (word)(PC - 1));
+
+            sprintf(buffer, "%-7s %s, $%02x %04x", I, label_string(W, \
+               bGetLabel, (word)(PC-3)), M, \
+               W2);
+               //label_string(W2, bGetLabel, (word)(PC-1)), W2);
           }
         else
-          //sprintf(buffer, "%-7s <%s", I, number_string(T, 2, (word)(PC - 1)));
-          sprintf(buffer, "%-7s %s, $%02x $%02x", I, number_string(T, 2, (word)(PC-1)), M, ARGBYTE(PC));
-
-        PC++;
+          sprintf(buffer, "%-7s xxxx2 %s, $%02x $%02x", I, number_string(T, 2, (word)(PC-3)), M, R);
         break;
+
+#if 0
+    case _br4x:
+        bGetLabel = !IS_CONST(PC);
+        T = ARGBYTE(PC); PC++;
+        M = ARGBYTE(PC); PC++;
+        unsigned char off
+
+        if (rels[PC - 1])
+          {
+              W = (int)((unsigned char)T) + rels[PC - 1];
+              sprintf(buf, "%s,X $%02x $%02x",
+                      label_string((word)((int)((unsigned char)T)), bGetLabel, (word)(PC - 1)), M, );
+              }
+             /* omit '$00', unless the user has set the 'showzero' option */
+            else if (!T && !showIndexedModeZeroOperand)
+              sprintf(buf, ",X $%02x", M);
+            else
+              sprintf(buf, "%s,X $%02x",
+                      number_string((word)((unsigned char)T), 2, (word)(PC - 1)), M);
+
+            sprintf(buffer, "%-7s %s", I, buf);
+            break;
+#endif
 
 
   default:
