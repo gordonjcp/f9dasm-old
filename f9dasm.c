@@ -1755,6 +1755,23 @@ switch(M)
     M = ARGBYTE(PC); PC++;
     break;
 
+  case _br4:
+    bSetLabel = !IS_CONST(PC);
+    T = ARGBYTE(PC);
+    PC++;
+    if (dp >= 0)
+      {
+      W = (word)((dp << 8) | T);
+      if (bSetLabel)
+        {
+        W = PhaseInner(W, (word)(PC - 1));
+        AddLabel(MI, W);
+        }
+      }
+      M = ARGBYTE(PC); PC++;
+      M = ARGBYTE(PC); PC++;
+
+      break;
 
   default:
     break;
@@ -2285,6 +2302,26 @@ switch (M)
 
       sprintf(buffer, "%-7s %s", I, buf);
       break;
+
+    case _br4:
+        bGetLabel = !IS_CONST(PC);
+        T = ARGBYTE(PC);PC++;
+        M = ARGBYTE(PC); PC++;
+        if (dp >= 0)
+          {
+          W = (word)((dp << 8) | T);
+          if (bGetLabel)
+            W = PhaseInner(W, (word)(PC - 1));
+            sprintf(buffer, "%-7s %s, $%02x $%02x", I, label_string(W, bGetLabel, (word)(PC-1)), M, ARGBYTE(PC));
+          //sprintf(buffer, "%-7s %s", I, label_string(W, bGetLabel, (word)(PC - 1)));
+          }
+        else
+          //sprintf(buffer, "%-7s <%s", I, number_string(T, 2, (word)(PC - 1)));
+          sprintf(buffer, "%-7s %s, $%02x $%02x", I, number_string(T, 2, (word)(PC-1)), M, ARGBYTE(PC));
+
+        PC++;
+        break;
+
 
   default:
     sprintf(buffer,"%-7s ERROR",I);

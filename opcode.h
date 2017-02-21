@@ -62,7 +62,7 @@ enum addr_mode
    _iml,     /* immediate 32-bit           */
    _dom,    /* direct bit manipulation */
    _dxom,    /* direct bit manipulation */
-
+   _br4,
    };
 
 

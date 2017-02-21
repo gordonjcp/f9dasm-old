@@ -34,10 +34,10 @@ _ill  ,_nom,   _nop  ,_imp,   _ill  ,_nom,   _ill  ,_nom,     /* 00..03 */
 _lsrd ,_imp,   _asld ,_imp,   _tap  ,_imp,   _tpa  ,_imp,     /* 04..07 */
 _inx  ,_imp,   _dex  ,_imp,   _clv  ,_imp,   _sev  ,_imp,     /* 08..0B */
 _clc  ,_imp,   _sec  ,_imp,   _cli  ,_imp,   _sei  ,_imp,     /* 0C..0F */
-_sba  ,_imp,   _cba  ,_imp,   _brset,_imb,   _brclr,_imb,     /* 10..13 */
+_sba  ,_imp,   _cba  ,_imp,   _brset,_br4,   _brclr,_br4,     /* 10..13 */
 _bset ,_dom,   _bclr ,_dom,   _tab  ,_imp,   _tba  ,_imp,     /* 14..17 */
 _ill  ,_nom,   _daa  ,_imp,   _ill  ,_nom,   _aba  ,_imp,     /* 18..1B */
-_bset ,_dxom,  _bclr ,_dxom,  _brset, _be,   _brclr, _be,     /* 1C..1F */
+_bset ,_dxom,  _bclr ,_dxom,  _brset,_br4,   _brclr,_br4,     /* 1C..1F */
 _bra  ,_reb,   _brn  ,_reb,   _bhi  ,_reb,   _bls  ,_reb,     /* 20..23 */
 _bcc  ,_reb,   _bcs  ,_reb,   _bne  ,_reb,   _beq  ,_reb,     /* 24..27 */
 _bvc  ,_reb,   _bvs  ,_reb,   _bpl  ,_reb,   _bmi  ,_reb,     /* 28..2B */
